@@ -1,3 +1,9 @@
+# ignore haters
+haters/
+
+.history
+*.ini
+
 # Logs
 logs
 *.log
