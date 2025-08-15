@@ -1,0 +1,44 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+    "search.exclude": {
+			"**/.vscode/**": true,
+      "**/build/**": true,
+      "**/dist/**": true,
+      "**/node_modules/**": true
+    },
+    "explorer.excludeGitIgnore": true,
+		"eslint.codeActionsOnSave.mode": "problems",
+		"eslint.run": "onType",
+    "eslint.validate": [
+      "javascript",
+      "typescript"
+    ],
+    "files.exclude": {
+			"**/.vscode/**": true,
+			"**/build/**": true,
+			"**/dist/**": true,
+			"**/node_modules/**": true
+    },
+    "local-history.daysLimit": 3,
+    "local-history.maxDisplay": 10,
+    "local-history.saveDelay": 5,
+    "local-history.dateLocale": "en-US",
+    "local-history.exclude": [
+      "**/.history/**",
+			"**/.vscode/**",
+			"**/node_modules/**",
+			"**/typings/**",
+			"**/out/**",
+			"**/Code/User/**",
+			"**/*.code-workspace",
+			"**/build/**",
+			"**/dist/**"
+    ],
+    "local-history.path": "${workspaceFolder}/.vscode"
+	}
+}

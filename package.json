@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "aidungeon.js",
+  "description": "Automatically generate setting-appropriate Story Cards, similar to AutoCards",
+  "author": "Magic <magicoflolis@tuta.io>",
+  "version": "1.0.0",
+  "license": "MIT",
+  "homepage": "https://github.com/magicoflolis/MagicCards",
+  "bugs": {
+    "url": "https://github.com/magicoflolis/MagicCards/issues"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@html-eslint/eslint-plugin": "^0.45.0",
+    "@html-eslint/parser": "^0.45.0",
+    "@types/node": "^24.2.1",
+    "@types/watchpack": "^2.4.4",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.1"
+  },
+  "dependencies": {
+    "axios": "^1.11.0",
+    "terser": "^5.43.1",
+    "watchpack": "^2.4.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magicoflolis/MagicCards.git"
+  },
+  "keywords": [
+    "aidungeon",
+    "aid",
+		"magiccards"
+  ],
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  }
+}
