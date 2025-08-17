@@ -3,7 +3,7 @@
 
 /**
  * Scripting API: https://help.aidungeon.com/scripting
- * 
+ *
  * Scripting Guidebook: https://github.com/magicoflolis/aidungeon.js/blob/main/Scripting%20Guidebook.md
  */
 export type LibraryAPI = unknown;
@@ -107,6 +107,13 @@ declare global {
   interface Info {
     /**
      * Total number of actions in the adventure.
+     *
+     * Here's how and when info.actionCount increments:
+     * - During a **Continue** action: `+1 → onContext → onOutput`
+     * - During a **Do/Say/Story** action: `+1 → onInput → +1 → onContext → onOutput`
+     * - During a single **Retry** followed by a **Continue**: `+1 → onContext → onOutput → -1 → +1 → onContext → onOutput`
+     *
+     * _Notice how a Retry increments during the first turn yet inhibits the next turn's +1 increment? This is useful to know!_
      */
     actionCount: number;
     /**
@@ -168,13 +175,13 @@ declare global {
    * @param description - This will set {@link StoryCard.description}.
    * @returns The new length of the {@link storyCards} array.
    */
-  function addStoryCard<K extends string, E extends string, T extends string | 'Custom', Title extends K, D extends string>(
-    keys?: K,
-    entry?: E,
-    type?: T,
-    title?: Title,
-    description?: D
-  ): number;
+  function addStoryCard<
+    K extends string,
+    E extends string,
+    T extends string | 'Custom',
+    Title extends K,
+    D extends string
+  >(keys?: K, entry?: E, type?: T, title?: Title, description?: D): number;
   /**
    * @deprecated use {@link addStoryCard} instead.
    */

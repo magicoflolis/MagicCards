@@ -6,6 +6,8 @@ import './ScriptingTypes.d.ts';
  */
 export type MagicAPI = unknown;
 
+declare function regExpEscape(str: string): string;
+
 declare global {
   class AIDError extends Error {
     cause?: unknown;
@@ -37,6 +39,7 @@ declare global {
       index: number;
       card: StoryCard;
     };
+    [Symbol.iterator](): Generator<StoryCard, void, undefined>;
   }
   /**
    * Similar to {@link Modifier} type and {@link modifier} function.
@@ -65,24 +68,41 @@ declare global {
     name: string;
     entry: string;
     output: string;
-    retries: number;
     progress: number;
+  }
+  interface MagicId {
+    id: string;
+    // data: {
+    //   name: string;
+    //   entry: string;
+    // };
+    cooldown: number;
+    summary: {
+      History: string;
+      // entry: {
+      //   [key: string]: string;
+      // };
+      // turn: Info['actionCount'];
+    }[];
   }
   type defaultOptions = {
     settings: {
       enabled: boolean;
       minTurns: number;
     };
-    database: dataEntry[];
+    pins: string[];
     cooldown: number;
-    createdCards: number[];
     data: dataQueue;
+    database: dataEntry[];
     dataQueue: dataQueue[];
+    disabled?: boolean;
+    errors: string[];
     generating: boolean;
     turnsSpent: number;
     // [key: string]: unknown;
   };
   interface State {
     messageHistory?: string[];
+    MagicCards?: defaultOptions;
   }
 }
