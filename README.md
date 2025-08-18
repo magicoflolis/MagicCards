@@ -130,6 +130,11 @@ const mc = new MagicCards();
 for (const card of Array.from(mc)) {
   console.log(card);
 }
+
+// Create a new story card
+const sc = mc.StoryCard({keys: 'foo', entry: 'bar'});
+// { card: StoryCard }
+console.log(sc.card);
 ```
 
 Temporarily disable:
