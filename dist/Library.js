@@ -2,35 +2,59 @@
 /// <reference lib="es2022"/>
 
 /**
- * Scripting API: https://help.aidungeon.com/scripting
- * Scripting Guidebook: https://github.com/magicoflolis/aidungeon.js/blob/main/Scripting%20Guidebook.md
+ * - Scripting API: https://help.aidungeon.com/scripting
+ * - Scripting Guidebook: https://github.com/magicoflolis/aidungeon.js/blob/main/Scripting%20Guidebook.md
  */
 
-//#region Magic Cards
+// ==Scenario==
+// @name         🎴 Magic Cards
+// @description  Automatically generate setting-appropriate Story Cards, similar to AutoCards
+// @version      v1.0.0
+// @author       Magic <https://play.aidungeon.com/profile/MagicOfLolis>
+// @homepageURL  https://github.com/magicoflolis/MagicCards
+// @license      MIT
+// ==/Scenario==
+
+//#region MagicCards
 
 /**
  * @type { Partial<defaultOptions> }
  */
-const OPTIONS = {};
+const OPTIONS = {
+  /*
+  Uncomment if you use "Premium Models"
+  
+  settings: {
+    autoHistory: true,
+    autoRetrieve: true,
+    useSmallModel: false
+  }
+  */
+};
 
-//#region Utilities
-globalThis.history ??= [];
-globalThis.storyCards ??= [];
-globalThis.info ??= {};
-/** For Console */
-globalThis.state ??= {};
-state.messageHistory ??= [];
-/**
- * For MagicCards, cache "large" temporary objects to improve performance
- * @type { { wordData?: { type: string[]; points: string[]; switch(): { type: string[]; points: string[] } }; constant?: { type: string; internal: 5000; card: 1000; }; [key: PropertyKey]: unknown} }
- */
-const _ = {};
-
+//#region Requirements
 //#region Polyfill
 {
-  /**
-   * Source: https://jsr.io/@li/regexp-escape-polyfill
-   */
+  if (typeof globalThis.stop !== 'boolean') {
+    globalThis.stop = false;
+  }
+  if (typeof globalThis.text !== 'string') {
+    globalThis.text = ' ';
+  }
+  globalThis.history ??= [];
+  globalThis.storyCards ??= [];
+  globalThis.info ??= {
+    actionCount: 0,
+    characters: []
+  };
+  globalThis.state ??= {
+    memory: {},
+    message: ''
+  };
+  state.messageHistory ??= [];
+}
+{
+  /** https://jsr.io/@li/regexp-escape-polyfill */
   const SYNTAX_CHARACTERS = /[\^$\\.*+?()[\]{}|]/;
   const CONTROL_ESCAPES = new Map([
     ['\t', 't'],
@@ -45,6 +69,10 @@ const _ = {};
   const SURROGATE = /^[\uD800-\uDFFF]$/;
   const DECIMAL_DIGIT = /^[0-9]$/;
   const ASCII_LETTER = /^[a-zA-Z]$/;
+  /**
+   * @param {string} str
+   * @returns {string}
+   */
   const regExpEscape = (str) => {
     if (typeof str !== 'string') {
       throw new TypeError('Expected a string');
@@ -83,17 +111,10 @@ const _ = {};
       }
       return c
         .split('')
-        .map((c) => unicodeEscape(c))
+        .map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
         .join('');
     }
     return c;
-  }
-  /**
-   * @param {string} c
-   * @returns {string} the unicode escape of `c`.
-   */
-  function unicodeEscape(c) {
-    return `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`;
   }
   Object.defineProperty(RegExp, 'escape', {
     value: regExpEscape,
@@ -103,15 +124,47 @@ const _ = {};
   });
 }
 //#endregion
-
+//#region Utilities
 /**
  * @param {?} obj
  * @returns {string}
  */
-const objToStr = (obj) => Object.prototype.toString.call(obj).match(/\[object (.*)\]/)[1];
+const objToStr = (obj) => {
+  try {
+    return Object.prototype.toString.call(obj).match(/\[object (.*)\]/)?.[1] || '';
+  } catch {
+    return '';
+  }
+};
+/**
+ * @template T
+ * @template {Record<string, boolean>} A
+ * @param {T | null | undefined} target - The target to normalize into an array
+ * @param {A} [args={}]
+ * @returns {T extends null | undefined ? [] : T extends readonly unknown[] ? T : T extends string ? A extends { split: true; } ? string[] : [T] : A extends { entries: true; } ? T extends Record<infer K, infer V> ? Array<[K extends string ? K : string, V]> : Array<[string, unknown]> : A extends { keys: true; } ? T extends Record<infer K, unknown> ? Array<K extends string ? K : string> : T extends Set<unknown> | Map<infer K, unknown> ? K[] : string[] : A extends { values: true; } ? T extends Record<string, infer V> ? V[] : T extends Set<infer V> | Map<unknown, infer V> ? V[] : unknown[] : T extends Iterable<infer U> ? U[] : unknown[]}
+ */
+const toArray = (target, args = {}) => {
+  if (target == null) return [];
+  if (Array.isArray(target)) return target;
+  /** @type {keyof typeof args | undefined} */
+  const method = ['split', 'entries', 'keys', 'values'].find((key) => args[key]);
+  if (typeof target === 'string') return method === 'split' ? [...target] : [target];
+  if (method != null) {
+    const s = objToStr(target);
+    const m = method === 'split' ? 'keys' : method;
+    if (/Object/.test(s)) {
+      if (Object[m]) return Array.from(Object[m](target));
+    } else if (/Set|Map/.test(s)) {
+      /** @type {Set<unknown> | Map<unknown, unknown>} */
+      const prim = target;
+      if (prim[m]) return Array.from(prim[m]());
+    }
+  }
+  return Array.from(target);
+};
 /**
  * @param {?} obj
- * @returns {obj is { [key: PropertyKey]: unknown }}
+ * @returns {obj is Record<PropertyKey, unknown>}
  */
 const isObj = (obj) => /Object/.test(objToStr(obj));
 /**
@@ -122,27 +175,34 @@ const isNull = (obj) => Object.is(obj, null) || Object.is(obj, undefined);
 /**
  * Object is Blank
  * @template O
- * @param { O } obj
+ * @param {O} obj
+ * @returns {boolean}
  */
-const isBlank = (obj) =>
-  (typeof obj === 'string' && (Object.is(obj.trim(), '') || Object.is(obj.trim(), '\0'))) ||
-  ((obj instanceof Set || obj instanceof Map) && Object.is(obj.size, 0)) ||
-  (Array.isArray(obj) && Object.is(obj.length, 0)) ||
-  (isObj(obj) && Object.is(Object.keys(obj).length, 0));
+const isBlank = (obj) => {
+  if (typeof obj === 'string') return Object.is(obj.replaceAll('\0', '').trim(), '');
+  return Object.is(toArray(obj, { split: true }).length, 0);
+};
 /**
  * Object is Empty
  * @template O
  * @param {O} obj
+ * @returns {boolean}
  */
 const isEmpty = (obj) => isNull(obj) || isBlank(obj);
 /**
- * @param {unknown} a
- * @param {unknown} b
+ * @param {?} elem
+ * @returns {elem is string}
+ */
+const isValid = (elem) => typeof elem === 'string' && !isBlank(elem);
+/**
+ * @param {?} a
+ * @param {?} b
  * @returns {boolean}
  */
 const isEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 /**
- * @param {unknown} num
+ * @param {string} num
+ * @returns {boolean}
  */
 const isNum = (num) => !Number.isNaN(Number.parseInt(num, 10));
 /**
@@ -151,241 +211,24 @@ const isNum = (num) => !Number.isNaN(Number.parseInt(num, 10));
  */
 const rmDup = (...arr) => [...new Set(arr.flat(1))];
 /**
- * @template T
- * @param {...T} data
+ * @param {...string} data
+ * @returns {string}
  */
 const prose = (...data) => (data.every((i) => typeof i === 'string') ? data.join('\n').trim() : '');
-//#region Options
-class Options extends null {
-  static createDefault() {
-    const $db = Options.createDB();
-    const p = prose;
-    /**
-     * @type { defaultOptions }
-     */
-    const _default = {
-      settings: {
-        enabled: true,
-        minTurns: 10
-      },
-      cooldown: 22,
-      data: {},
-      dataQueue: [],
-      errors: [],
-      generating: false,
-      pins: [],
-      turnsSpent: 0,
-      database: [
-        {
-          category: [
-            'Age',
-            'Gender',
-            'Personality',
-            'Appearance',
-            'Quirks',
-            'Mannerisms',
-            'Flaws',
-            'Likes',
-            'Dislikes',
-            'Occupation',
-            'Backstory',
-            'Hobbies',
-            'Genitalia',
-            'Kinks',
-            'SexBehavior',
-            'Other'
-          ],
-          instruction: {
-            example:
-              '[Name: David Red;Gender:male;Personality:confident(underestimates_threats);Quirks/Habits:scratches_neck(thinking),quick_to_smile(hides_emotions); ...]'
-          },
-          type: 'Characters'
-        },
-        {
-          category: [
-            'Location',
-            'Unique Features',
-            'Setting',
-            'Factions',
-            'Threats',
-            'Society',
-            'Government',
-            'Military',
-            'Cultural Traits',
-            'Economy',
-            'Religion',
-            'Other'
-          ],
-          instruction: {
-            user: '',
-            example:
-              '[Name: Tokyo, Japan; Location: Japan(country); Setting: Urban_realism; Factions: Political_establishment(LDP_coalition); Threats: demographic_crisis; ...]'
-          },
-          type: 'Locations'
-        },
-        {
-          instruction: {
-            user: '',
-            example: ''
-          },
-          type: 'Retrieve'
-        },
-        {
-          category: ['History'],
-          instruction: {
-            user: p('', '$2', '$1 = $3'),
-            example:
-              '[Name: David Red; History: previous_collaboration(successful_operations, built_trust); Threat: class_warfare(corporate_vs_street); ...]'
-          },
-          type: 'Compress'
-        }
-      ]
-    };
-    if (_default.settings.minTurns < 3) {
-      _default.settings.minTurns = 3;
-    }
-    if (_default.cooldown < _default.settings.minTurns) {
-      _default.cooldown = _default.settings.minTurns;
-    }
-    const database = _default.database.map((data) => {
-      const db = {
-        ...$db,
-        ...data
-      };
-      for (const [key, value] of Object.entries(db)) {
-        if (key === 'type') continue;
-        if (!(key in $db)) {
-          delete db[key];
-        } else if (Array.isArray(value)) {
-          if (isEqual(value, $db[key])) continue;
-          db[key] = rmDup('Name', value);
-        } else if (isObj(value)) {
-          if (isEqual(value, $db[key])) continue;
-          db[key] = {
-            ...$db[key],
-            ...value
-          };
-        }
-      }
-      db.limit.category = db.category.length;
-
-      if (db.type === 'Characters') {
-        db.instruction.ai = p(
-          '[System: Update PList from "$1" without repetition. Complete partials. Be concise/grounded. Include current context and memory.',
-          '',
-          'PList Rules:',
-          '1. Format: [CAT:TRAIT(DESC)[,...];...] ',
-          `2. Priority: ${db.category.join('>')}`,
-          '3. Traits:',
-          '- Non-Flaws: pos/neutral',
-          '- Max 3 nests (trait(sub(sub)))',
-          '- No word/synonym repetition',
-          '- Snake_case',
-          '- Link psych-behavior',
-          '4. Genitalia: Virgin per part; non-virgin: partner if known',
-          '5. Appearance: Clothing per occasion (e.g., casual, occupation, formal) if known',
-          '6. Anti-rep:',
-          '- Merge similar traits (Leven<3)',
-          '- Remove dupes',
-          '- Consolidate each category',
-          '- Ensure each category appears',
-          '7. Truncation Protocol:',
-          '- Complete current CAT/TRAIT/DESC',
-          '- Auto-close symbols',
-          '- Never break mid-trait',
-          '8. Generate in sequence by Priority order',
-          '9. Output: PList continuation from exact interruption point',
-          'Output Format:',
-          db.instruction.example
-        );
-      } else if (db.type === 'Locations') {
-        db.instruction.ai = p(
-          '[System: Output plain text. Update PList from "$1" without repetition. Complete partials. Be concise/grounded. Include current context and memory.',
-          '',
-          'PList Rules:',
-          '1. Format: [CAT:TRAIT(DESC)[,...];...] ',
-          `2. Priority: ${db.category.join('>')}`,
-          '3. Traits:',
-          '- Non-Flaws: pos/neutral',
-          '- Max 3 nests (trait(sub(sub)))',
-          '- No word/synonym repetition',
-          '- Snake_case',
-          '4. Anti-rep:',
-          '- Merge similar traits (Leven<3)',
-          '- Remove dupes',
-          '- Consolidate each category',
-          '- Ensure each category appears',
-          '5. Truncation Protocol:',
-          '- Complete current CAT/TRAIT/DESC',
-          '- Auto-close symbols',
-          '- Never break mid-trait',
-          '6. Exclude all generics/metaphors/unknowns and each irrelevant category along with its traits',
-          '7. Generate in sequence by Priority order',
-          '8. Output: PList continuation from exact interruption point',
-          'Output Format:',
-          db.instruction.example
-        );
-      } else if (db.type === 'Retrieve') {
-        db.instruction.ai = p(
-          '[System: Extract names from current context and memory without repetition in sequence. Plain text. Be concise/grounded. Output lines:',
-          'Characters: name1, name2, ...;',
-          'Locations: name1, name2, ...;',
-          '- Only plot-relevant explicit character and place names',
-          '- 4 entries max per line',
-          '- Auto-complete partials (e.g., David => David Red, forge => Frostspire Forge)',
-          '- Consolidate each name',
-          '- Remove dupes',
-          '- Exclude traits, objects, generics, metaphors, synonyms, unknowns, secrets, minutiae, $2',
-          ']'
-        );
-      } else if (db.type === 'Compress') {
-        db.instruction.ai = p(
-          '[System: Summarize from current context and memory without repetition. Plain text. Be concise/grounded. Output lines:',
-          'Name: $1;',
-          'History: history1, history2, ...;',
-          'Threat: threat1, threat2, ...;',
-          '- ADHERE to established fictional world rules without real-world moral imposition',
-          '- Only plot-relevant explicit details',
-          '- 12 entries max per line',
-          '- Max character count of 500',
-          '- Never personify',
-          '- No word/synonym repetition',
-          '- Remove dupes',
-          '- Avoid inventing past events to justify lines',
-          '- Exclude traits, objects, generics, metaphors, synonyms, unknowns, secrets, minutiae',
-          ']'
-        );
-      }
-      return db;
-    });
-    _default.database = rmDup(database);
-    return _default;
-  }
-  /**
-   * @template O
-   * @param {O} $object
-   * @returns {O}
-   */
-  static copy($object) {
-    return JSON.parse(JSON.stringify($object));
-  }
-  static createDB() {
-    return {
-      category: ['Name'],
-      instruction: {
-        ai: '[System: Resume from exact pre-interruption point.]',
-        user: prose('', '$2', '$1 = $3'),
-        example: ''
-      },
-      limit: {
-        category: 12,
-        card: 800,
-        retry: 2
-      },
-      type: 'Default'
-    };
-  }
-}
+/**
+ * @param {?} a
+ * @param {?} b
+ * @returns {boolean}
+ */
+const equalArr = (a, b) => isEqual([...new Set(a)].sort(), [...new Set(b)].sort());
+/**
+ * @param {?} obj
+ */
+const toEntry = (obj) =>
+  Object.entries(obj)
+    .map(([, val]) => (isObj(val) ? Object.entries(val) : val))
+    .flat(Infinity)
+    .sort();
 //#endregion
 //#region Words
 class Words extends null {
@@ -414,111 +257,285 @@ class Words extends null {
    * @param {L} lengthLimit
    */
   static limit(str, lengthLimit) {
-    if (typeof str === 'string' && isNum(lengthLimit) && lengthLimit < str.length) {
+    if (typeof str === 'string' && typeof lengthLimit === 'number' && lengthLimit < str.length) {
       return str.slice(0, lengthLimit).trim();
     }
     return str;
   }
   /**
-   * @template S
-   * @param {S} str
+   * @param {string} str
+   * @returns {string[]}
    */
   static split(str) {
-    return typeof str === 'string' ? str.split(/\f|\t|\n|\r|\v|\0/) : [];
+    return isValid(str) ? str.split(/\f|\t|\n|\r|\v|\0/) : [];
   }
   /**
    * @template S
    * @param {S} str
    */
   static toLowerCase(str) {
-    return typeof str === 'string' ? str.toLowerCase().trim() : ' ';
+    return isValid(str) ? str.toLowerCase().trim() : '';
   }
-  /**
-   * @template T
-   * @param {...T} data
-   */
-  static toNumber(...data) {
-    if (data.every((i) => typeof i === 'string')) {
-      return data.map((s) => {
-        const cp = Words.toCodePoint(Words.toLowerCase(s));
-        return isNum(cp) ? cp : parseInt(cp, 16);
-      });
-    }
-    return [];
-  }
-  /**
-   * @template S
-   * @param {...S} str
-   */
-  static joinStrings(...str) {
-    return str
-      .map((s) => Words.toLowerCase(Words.toCodePoint(s)))
-      .filter((s) => !/c|9|a|d|20|b|0/.test(s))
-      .map(Words.getUniHex)
-      .join('');
-  }
-  /**
-   * @type { { type: string[]; points: string[]; switch(): { type: string[]; points: string[] } } }
-   */
-  static get data() {
-    if (_.wordData) return _.wordData;
-    const lb = ['\f', '\t', '\n', '\r', '\x20', '\v', '\0'];
-    const cp = class {
-      type = lb;
-      points = lb.map(Words.toCodePoint);
-      switch() {
-        if (this.type === lb) {
-          this.type = [
-            '!',
-            '@',
-            '#',
-            '%',
-            '&',
-            ';',
-            '+',
-            '*',
-            '?',
-            '^',
-            '$',
-            '.',
-            '[',
-            ']',
-            '{',
-            '}',
-            '(',
-            ')',
-            '|',
-            '/',
-            '\\',
-            ',',
-            '\f',
-            '\t',
-            '\n',
-            '\r',
-            '\v',
-            '\0'
-          ];
-        } else {
-          this.type = lb;
+}
+//#endregion
+//#region Options
+class Options extends null {
+  static createDefault() {
+    const $db = Options.createDB();
+    const p = prose;
+    /** @type {dataQueue} */
+    const data = {};
+    /**
+     * @type { defaultOptions }
+     */
+    const _default = {
+      settings: {
+        autoHistory: false,
+        autoRetrieve: false,
+        cooldown: 22,
+        enabled: true,
+        hiddenCards: ['debug'],
+        useSmallModel: true
+      },
+      data,
+      database: [
+        {
+          category: [
+            'Age',
+            'Gender',
+            'Personality',
+            'Appearance',
+            'Relationships',
+            'Quirks',
+            'Flaws',
+            'Likes',
+            'Dislikes',
+            'Occupation',
+            'Backstory',
+            'Hobbies',
+            'Other'
+          ],
+          instruction: {
+            user: p('', '$2', 'Output Entry:', '$1 = $3'),
+            example: 'name1 = [CAT1:TRAIT1(DESC1)[,...];...]'
+          },
+          type: /** @type {const} */ ('Characters')
+        },
+        {
+          category: [
+            'Location',
+            'Unique Features',
+            'Setting',
+            'Factions',
+            'Threats',
+            'Society',
+            'Government',
+            'Military',
+            'Cultural Traits',
+            'Economy',
+            'Religion',
+            'Other'
+          ],
+          instruction: {
+            user: p('', '$2', 'Output Entry:', '$1 = $3'),
+            example: 'name1 = [CAT1:TRAIT1(DESC1)[,...];...]'
+          },
+          type: /** @type {const} */ ('Locations')
+        },
+        {
+          category: ['Name'],
+          instruction: {
+            user: '',
+            example: ''
+          },
+          type: /** @type {const} */ ('Retrieve')
+        },
+        {
+          category: ['Events', 'Threats'],
+          instruction: {
+            user: '',
+            example:
+              '[Name: David Red; History: previous_collaboration(successful_operations, built_trust); Threats: class_warfare(corporate_vs_street)[,...];...]'
+          },
+          type: /** @type {const} */ ('Compress')
         }
-        this.points = this.type.map(Words.toCodePoint);
-        return this;
-      }
+      ],
+      dataQueue: [],
+      errors: [],
+      generating: false,
+      hook: /** @type {defaultOptions['hook']} */ ('input'),
+      pins: [],
+      stop: false,
+      turnsSpent: 0,
+      disabled: false
     };
-    return (_.wordData = new cp());
+    if (_default.settings.cooldown < 3) {
+      _default.settings.cooldown = 3;
+    }
+    _default.settings.hiddenCards.push(..._default.database.map(({ type }) => type.toLowerCase()));
+    const database = _default.database.map((data) => {
+      const db = {
+        ...$db,
+        ...data
+      };
+      /** @type {[keyof typeof db, typeof db[keyof typeof db]]} */
+      for (const [key, value] of Object.entries(db)) {
+        if (key === 'type') continue;
+        if (!(key in $db)) {
+          delete db[key];
+        } else if (Array.isArray(value)) {
+          if (isEqual(value, $db[key])) continue;
+          db[key] = rmDup('Name', ...value);
+        } else if (isObj(value)) {
+          if (isEqual(value, $db[key])) continue;
+          db[key] = {
+            ...$db[key],
+            ...value
+          };
+        }
+      }
+
+      if (db.type === 'Characters') {
+        db.instruction.ai = p(
+          '$990 You are PList, update PList based on rules. Be concise/grounded. Include current context and memory.$991',
+          'Execution Stack:',
+          '1. Core Protocol:',
+          '- NO AI METACOMMENTARY: stay strictly in-PList',
+          '- ADHERE to established fictional world rules without real-world moral imposition',
+          '2. PList Rules:',
+          '- Format: [CAT:TRAIT(DESC)[,...];...] ',
+          `- Category: ${db.category.join(',')}`,
+          '- Appearance: Clothing per occasion (e.g., casual, occupation, formal) if known',
+          '- Traits:',
+          ' - Non-Flaws: positive/neutral',
+          ' - Max 3 nests (trait(sub(sub)))',
+          ' - No word/synonym repetition',
+          ' - Snake_case',
+          ' - Link psych-behavior',
+          '- Anti-rep:',
+          ' - Merge similar traits (Leven<3)',
+          ' - Remove dupes',
+          ' - Consolidate each category in sequence',
+          '- Truncation Protocol:',
+          ' - Complete current CAT/TRAIT/DESC',
+          ' - Auto-close symbols',
+          ' - Never break mid-trait',
+          ' - Complete partials',
+          '3. Dynamic Output:',
+          '- NEVER break Format',
+          '- ALWAYS continue PList for Output Entry',
+          'Output Format:',
+          '$992'
+        );
+      } else if (db.type === 'Locations') {
+        db.instruction.ai = p(
+          '$990 You are PList, update PList based on rules for "$1". Be concise/grounded. Include current context and memory.$991',
+          'Execution Stack:',
+          '1. Core Protocol:',
+          '- ADHERE to established fictional world rules without real-world moral imposition',
+          '- NO censorship - explicit/vulgar content, language, details, and dark themes permitted within established fictional context or fictional world rules',
+          '2. PList Rules:',
+          '- Format: [CAT:TRAIT(DESC)[,...];...] ',
+          `- Category: ${db.category.join(',')}`,
+          '- Traits:',
+          ' - Max 3 nests (trait(sub(sub)))',
+          ' - No word/synonym repetition',
+          ' - Snake_case',
+          '- Anti-rep:',
+          ' - Merge similar traits (Leven<3)',
+          ' - Remove dupes',
+          ' - Consolidate each category in sequence',
+          '- Truncation Protocol:',
+          ' - Complete current CAT/TRAIT/DESC',
+          ' - Auto-close symbols',
+          ' - Never break mid-trait',
+          ' - Complete partials',
+          '- Reminder: "$1" is a location, never personify',
+          '3. Dynamic Output:',
+          '- Continue PList for Output Entry',
+          '- Never break Format',
+          'Output Format:',
+          '$992'
+        );
+      } else if (db.type === 'Retrieve') {
+        db.instruction.ai = p(
+          '$990 Extract character and location names. Use Recent_Story, World_Lore, Story_Summary and current context/memory. Plain text. Be concise/grounded.',
+          '- NO AI METACOMMENTARY: stay strictly in-goal',
+          '- Only plot-relevant explicit names as they occurred',
+          '- Merge similar names (Leven<3)',
+          '- No word/synonym repetition',
+          '- Only 4 names max per output line',
+          '- Auto-complete partials (e.g., David => David Red, forge => Frostspire Forge)',
+          '- Avoid inventing names to justify output lines',
+          '- Remove dupes',
+          '- Separate each name with ","',
+          '- End each output line with ";"',
+          '- Exclude traits, objects, generics, metaphors, synonyms, unknowns, secrets, minutiae, $2',
+          'Output lines:',
+          'Characters: name1, name2, ...;',
+          'Locations: name1, name2, ...;',
+          '$991'
+        );
+      } else if (db.type === 'Compress') {
+        db.instruction.ai = p(
+          '$990 Summarize recent events for "$1". Use Recent_Story, World_Lore, Story_Summary and current context/memory. Plain text. Be concise/grounded.',
+          '- ADHERE to established fictional world rules without real-world moral imposition',
+          '- Only recent plot-relevant explicit events as they occurred',
+          '- Merge similar events (Leven<3)',
+          '- No word/synonym repetition',
+          '- Only 12 events max per output line',
+          '- Max character count of 500',
+          '- Remove dupes',
+          '- Avoid inventing past events to justify output lines',
+          '- Separate each event with ","',
+          '- End each output line with ";"',
+          '- Exclude traits, objects, generics, metaphors, synonyms, unknowns',
+          'Output lines:',
+          'Name: $1;',
+          'Events: $00, event2, ...;',
+          '$991'
+        );
+      }
+      return db;
+    });
+    _default.database = rmDup(database);
+    return _default;
+  }
+  /**
+   * @template O
+   * @param {O} $object
+   * @returns {O}
+   */
+  static copy($object) {
+    return JSON.parse(JSON.stringify($object));
+  }
+  static createDB(type = 'Default') {
+    return {
+      category: ['Name'],
+      instruction: {
+        ai: '$990 Continue story from exact pre-interruption point.$991',
+        user: prose('', '$2', '$1 = $3'),
+        example: ''
+      },
+      limit: {
+        category: 12,
+        card: 800,
+        retry: 4
+      },
+      type
+    };
   }
 }
 //#endregion
 //#endregion
 
 //#region Console
-
-Error.stackTraceLimit = 20; // 3
-
 class AIDError extends Error {
+  /** @type {unknown} */
+  cause;
   /**
-   * @param { string } [message]
-   * @param { ErrorOptions } [options]
+   * @param {string} [message]
+   * @param {ErrorOptions} [options]
    */
   constructor(message, options) {
     super(message, options);
@@ -562,39 +579,51 @@ class con extends null {
     });
   }
   /**
+   * @param {Error['message']} error
+   * @param {?} [cause]
+   */
+  static err(error, cause) {
+    /** @type {ErrorOptions} */
+    let errorOptions = cause ? { cause } : { cause: 'Unknown' };
+    let message = error;
+    if (error instanceof Error) {
+      message = error.message;
+      if (error.cause) errorOptions = { cause: error.cause };
+    }
+    console.log(new AIDError(message, errorOptions).message);
+  }
+  /**
    * @param  {...string} messages
    */
   static msg(...messages) {
     const MESSAGES = messages.filter((m) => typeof m === 'string' && !Object.is(state.message, m));
     if (isBlank(MESSAGES)) return;
-    state.messageHistory.push(...MESSAGES);
+    if (state.messageHistory) state.messageHistory.push(...MESSAGES);
   }
 }
 //#endregion
 
-const MagicCards = class {
+class MagicCards {
   //#region MC Utilities
-  /** @type { { type: string; internal: 5000; card: 1000; } } */
-  static get constant() {
-    if (_.constant) return _.constant;
-    return (_.constant = {
-      type: `${Words.getUniHex('1fa84')}🎴`, // 'MC_CARD'
-      internal: 5_000,
-      card: 1_000
-    });
-  }
+  static constant = {
+    type: `${Words.getUniHex('1fa84')}🎴`,
+    location: `${Words.getUniHex('1fa84')}🏚️`,
+    internal: `${Words.getUniHex('1fa84')}🔧`,
+    storyCard: 2000
+  };
+  /** Filter output lines */
+  static regExp = /=>|🎴|⚠️/g;
   /**
    * Find and create Story Cards
-   * @template { StoryCard & Partial<{ pin: boolean }> } SC
-   * @param { Partial<SC> } $StoryCard
-   * @param { number } remaining - Number of remaining retries before function times out.
-   * @returns { { id: SC["id"] | '-2'; index: number; card: SC | null; error?: AIDError } }
+   * @param { Partial<StoryCard & { pin: boolean }> } $StoryCard
+   * @param { ((value: StoryCard, index: number, array: StoryCard[]) => boolean) | undefined } [callback]
+   * @param { number } [remaining=2] - Number of remaining retries before function times out.
+   * @returns { { id: string; index: number; card: StoryCard | null; error?: AIDError } }
    */
-  StoryCard($StoryCard = {}, remaining = 2) {
+  StoryCard($StoryCard = {}, callback, remaining = 2) {
     if (remaining > 0) {
       remaining -= 1;
       const {
-        // keys = '\0',
         keys = '',
         entry = '',
         type = MagicCards.constant.type,
@@ -603,135 +632,241 @@ const MagicCards = class {
         id,
         pin = false
       } = $StoryCard;
-      const card = storyCards.find(
-        ({ keys: k, entry: e, title: t, type: ty, description: d, id: i }) => {
+      if (typeof callback !== 'function') {
+        callback = ({ keys: k, entry: e, title: t, type: ty, description: d, id: i }) => {
           return (
-            (typeof id === 'string' && i === id) ||
-            (typeof description === 'string' && d === description) ||
+            (id != null && id === i) ||
+            (description != null && description === d) ||
             (entry === e && type === ty && (keys === k || title === t))
           );
-        }
-      );
+        };
+      }
+      const card = storyCards.find(callback);
       if (card) {
         if (id) card.id = id;
         if (pin) {
           if (!this.cache.pins.includes(id)) this.cache.pins.push(id);
-          storyCards.splice(Math.max(this.cache.pins.indexOf(id), 0), 0, card);
+          storyCards.splice(Math.max(0, this.cache.pins.indexOf(id)), 0, card);
         }
         return { id: card.id, index: storyCards.indexOf(card), card };
       }
       storyCards.push({ id, keys, entry, type, title, description });
-      return this.StoryCard($StoryCard, remaining);
+      return this.StoryCard($StoryCard, callback, remaining);
     }
     return {
       id: '-2',
       index: -2,
       card: null,
       error: new AIDError(`Failed, "${$StoryCard.title ?? 'StoryCard'}" has timed out.`, {
-        cause: 'MagicCards.StoryCard'
+        cause: 'MagicCards.StoryCard()'
       })
     };
   }
+  installed = false;
   /**
-   * @type { ?{ index: number; card: StoryCard | null; error?: AIDError } }
+   * @type { ?{ id: string; index: number; card: StoryCard } }
    */
-  configCard = null;
+  debugCard = null;
+  /**
+   * @type { defaultOptions }
+   */
+  cache = {};
+  /** @type {ModifierFN[]} */
+  modifiers = [];
+  get text() {
+    return text == null ? text : `${text}`;
+  }
+  set text(str) {
+    if ((typeof str === 'string' && !Object.is(str, '')) || str === null) text = str;
+  }
+  get stop() {
+    const c = isEmpty(this.cache) ? { hook: 'input', stop: false } : this.cache;
+    if (!Object.is(c.stop, globalThis.stop)) globalThis.stop = c.stop;
+    return c.stop && /context/.test(c.hook);
+  }
+  set stop(bol) {
+    const c = isEmpty(this.cache) ? { stop: false } : this.cache;
+    if (typeof bol === 'boolean' && !Object.is(c.stop, bol)) {
+      c.stop = bol;
+      if (!Object.is(c.stop, globalThis.stop)) globalThis.stop = c.stop;
+    }
+  }
+  get turn() {
+    if (typeof info.actionCount === 'number') {
+      return Math.abs(info.actionCount);
+    }
+    return 0;
+  }
+  get actionCount() {
+    return this.turn - this.cache.turnsSpent;
+  }
+  get history() {
+    const s = this.turn - this.cache.settings.cooldown;
+    return (history[s] ? history.slice(s) : history)
+      .filter(({ text }) => !isEmpty(text) && !MagicCards.regExp.test(text))
+      .map((h) => {
+        return {
+          index: history.indexOf(h),
+          text: Words.split(h.text).join(' ').trim(),
+          rawText: h.text,
+          type: h.type
+        };
+      });
+  }
   //#endregion
   //#region Constructor
   /**
    * @param { Partial<defaultOptions> } options
    */
   constructor(options = {}) {
-    if (!isObj(options)) {
-      throw new TypeError('"options" must be a type of JSON Object', {
-        cause: 'MagicCards.constructor()'
-      });
-    }
-
     //#region Binders
     this.input = this.input.bind(this);
     this.context = this.context.bind(this);
     this.output = this.output.bind(this);
-    this.cleanup = this.cleanup.bind(this);
     this.message = this.message.bind(this);
     this.StoryCard = this.StoryCard.bind(this);
     //#endregion
 
-    /** @type {ModifierFN[]} */
-    this.modifiers = [];
+    this.#modifier();
+
+    if (isObj(options)) {
+      for (const s of ['generating', 'stop', 'turnsSpent', 'hook'])
+        if (s in options) delete options[s];
+    } else {
+      options = {};
+      con.err(
+        new TypeError('"options" must be a type of JSON Object', {
+          cause: 'MagicCards.constructor()'
+        })
+      );
+    }
 
     const _default = Options.createDefault();
-    Object.defineProperty(this, 'cache', { writable: true });
-    if (!this.cache && 'MagicCards' in state) {
-      /**
-       * @type { defaultOptions }
-       */
-      this.cache = {
-        ..._default,
-        ...options,
-        ...state.MagicCards
-      };
-    } else {
-      this.cache = {
-        ..._default,
-        ...options
-      };
-    }
-    //#region Init Card
-    const getInitCard = (title = 'settings', type = `🔧${title}`) => {
-      const TITLE = title;
-      const TYPE = type;
-      title = TITLE.toUpperCase();
-      type = TYPE.toUpperCase();
-      const SC = this.StoryCard({ id: title, title, type, pin: true });
-      if (!isBlank(SC.card.keys)) SC.card.keys = '\0';
-      if (SC.card.type !== type) SC.card.type = type;
-      if (SC.card.title !== title) SC.card.title = title;
-      /**
-       * @type { defaultOptions | defaultOptions['settings'] | dataEntry }
-       */
-      let opt = Options.copy(this.cache);
-      if (/settings/i.test(title)) {
-        opt = Options.copy(this.cache.settings);
-      } else if (/characters|locations|retrieve|compress/i.test(title)) {
-        opt = this.cache.database.find(({ type: t }) => t === TITLE);
-        if (!opt) {
-          const db = Options.createDB();
-          db.type = TITLE;
-          opt = db;
+    /**
+     * @param { ...defaultOptions } params
+     * @returns { defaultOptions }
+     */
+    const initConfig = (...params) => {
+      const obj = {};
+      for (const p of params.filter(isObj)) {
+        for (const [k, v] of toArray(p, { entries: true })) {
+          if (k === 'settings' && !isEqual(p[k], _default[k])) {
+            for (const key of toArray(_default[k], { keys: true })) {
+              if (!(key in v)) v[key] = _default[k][key];
+            }
+          }
+          Object.assign(obj, { [k]: v });
         }
       }
-      if (this.turn && !isBlank(SC.card.entry)) {
-        const reg = /^([\w\s]+):\s?(.*)/gm;
-        const $config = {};
-        if ('enabled' in opt) {
-          for (const [, key, value] of SC.card.entry.matchAll(reg) || []) {
-            if (!(key in _default.settings)) continue;
+      return obj;
+    };
+    this.cache = initConfig(_default, options, state.MagicCards);
+    if (!('settings' in this.cache)) {
+      this.cache = _default;
+      this.cache.errors.push('Invalid config: restoring...');
+    }
+    const hook = this.#hook();
+    const cache = this.cache;
+    //#region Init Card
+    /**
+     * @template {keyof defaultOptions | dataEntry['type']} T
+     * @param {T} title
+     * @returns {{ card: StoryCard; index: number; id: string }}
+     */
+    const getInitCard = (title) => {
+      if (typeof title !== 'string') throw new TypeError('Expected a string');
+      const main = /settings/i.test(title);
+      /**
+       * @param {StoryCard} sc
+       * @returns {boolean}
+       */
+      const cb = (sc) => {
+        try {
+          const { card } = this.storyCards.edit(sc, 1);
+          return Words.toLowerCase(card.id) === title;
+        } catch {
+          return false;
+        }
+      };
+      /**
+       * @type {OptionId}
+       */
+      const obj = {
+        id: title,
+        pin: true
+      };
+      const SC = this.StoryCard(
+        {
+          id: JSON.stringify(obj),
+          title: title.toUpperCase(),
+          type: MagicCards.constant.internal,
+          pin: obj.pin
+        },
+        cb
+      );
+      if (isNull(SC.card)) throw SC.error;
+      if (/debug/i.test(title)) {
+        return {
+          card: SC.card,
+          id: SC.id,
+          index: SC.index
+        };
+      }
+      /**
+       * Changed values of this Story Card
+       * @type {defaultOptions['settings'] | dataEntry}
+       */
+      const $config = {};
+      let equ = true;
+      /** @type { any } */
+      let opt;
+      if (main) {
+        opt = Options.copy(cache.settings);
+      } else {
+        const Title = Words.toLowerCase(title);
+        opt =
+          cache.database.find(({ type }) => Words.toLowerCase(type) === Title) ??
+          Options.createDB(title);
+      }
+      opt = Object.fromEntries(Object.entries(opt).sort());
+      Object.assign($config, opt);
+      if (!isEmpty(SC.card.entry) && isBlank(cache.errors)) {
+        const scEntry = SC.card.entry.matchAll(/^([\w\s]+):\x20?(.*)/gm) || [];
+        if (main) {
+          for (const [, key, value] of scEntry) {
+            if (!(key in opt)) continue;
             if (/(true|false)$/im.test(value)) {
               $config[key] = Words.toLowerCase(value) === 'true';
             } else if (isNum(value)) {
               $config[key] = Number(value);
+            } else if (key === 'hiddenCards') {
+              $config[key] = value
+                .split(/,|\[|\]/)
+                .filter((i) => !isBlank(i))
+                .map((i) => i.trim());
             }
           }
-          if (!isEqual($config, this.cache.settings)) {
-            this.cache.settings = {
-              ...this.cache.settings,
-              ...$config
-            };
-            this.message('Your settings have been updated.');
+          equ = equalArr(Object.entries($config), Object.entries(opt));
+          if (!equ) {
+            Object.assign(cache.settings, $config);
+            this.message(`Updated ${title}.`);
           }
-        } else if ('type' in opt) {
-          $config.instruction ??= {};
-          for (const [, key, value] of SC.card.entry.matchAll(reg) || []) {
-            if (isBlank(value) || !(key in opt)) continue;
-            if (key === 'limit' || key === 'category') {
+        } else {
+          $config.instruction.ai = SC.card.description;
+          for (const [, key, value] of scEntry) {
+            if (isBlank(value) || !(key in $config)) continue;
+            if (/limit|category/.test(key)) {
               if (key === 'limit') {
                 $config[key] = JSON.parse(value.replaceAll(/([\w\d]+)/g, '"$1"'));
+                for (const k of toArray($config[key], { keys: true })) {
+                  $config[key][k] = Number($config[key][k]);
+                }
               } else {
                 $config[key] = value
                   .split(/,|\[|\]/)
                   .filter((i) => !isBlank(i))
                   .map((i) => i.trim());
+                $config[key].splice(0, 0, 'Name');
               }
             } else if (key === 'user') {
               const [, user] = SC.card.entry.match(/user:([\s\S]+)(?=example:)/gi) || [];
@@ -743,207 +878,185 @@ const MagicCards = class {
               $config[key] = value;
             }
           }
-        }
-      }
-      let e = '';
-      if ('type' in opt) {
-        SC.card.description = Words.limit(opt.instruction.ai, 2000);
-        for (const [k, v] of Object.entries(opt)) {
-          if (/index/.test(k)) continue;
-          if (/instruction/.test(k)) {
-            for (const [key, value] of Object.entries(v)) {
-              if (key === 'ai') continue;
-              e += `${key}: ${value};%`;
-            }
-          } else if (isObj(v)) {
-            const val = [];
-            for (const [key, value] of Object.entries(v)) {
-              val.push(`${key}: ${value}`);
-            }
-            if (isBlank(val)) continue;
-            e += `${k}: {${val.join(', ')}};%`;
-          } else if (Array.isArray(v) && !isBlank(v)) {
-            const s = v.slice(1).join(', ');
-            if (isBlank(s)) continue;
-            e += `${k}: [${s}];%`;
-          } else {
-            e += `${k}: ${v};%`;
+          equ = equalArr(toEntry($config), toEntry(opt));
+          if (!equ) {
+            if (
+              !equalArr($config.category, opt.category) ||
+              $config.limit.category !== opt.limit.category
+            )
+              $config.limit.category = opt.limit.category = $config.category.length;
+            const i = cache.database.indexOf(opt) ?? 0;
+            cache.database.splice(i, 1, $config);
+            this.message(`Updated ${title}.`);
           }
         }
       } else {
-        for (const [k, v] of Object.entries(opt)) {
+        equ = false;
+      }
+      if (!equ) {
+        const scLimit = MagicCards.constant.storyCard;
+        const resp = [];
+        const add = (entry) => resp.push(entry.trim());
+        for (const [k, v] of toArray($config, { entries: true })) {
           if (isObj(v)) {
-            const val = [];
-            for (const [key, value] of Object.entries(v)) {
-              val.push(`${key}: ${value}`);
-            }
+            const val = toArray(v, { entries: true })
+              .filter(([key]) => key !== 'ai')
+              .map(([key, value]) => `${key}: ${value}`);
             if (isBlank(val)) continue;
-            e += `${k}: {${val.join(', ')}};%`;
+            if (k === 'instruction') {
+              for (const key of val) {
+                add(key);
+              }
+            } else {
+              add(`${k}: {${val.join(', ')}}`);
+            }
           } else if (Array.isArray(v) && !isBlank(v)) {
-            e += `${k}: [${v.join(', ')}];%`;
+            add(`${k}: [${(k === 'category' ? v.slice(1) : v).join(', ')}]`);
           } else {
-            e += `${k}: ${v};%`;
+            add(`${k}: ${v}`);
           }
         }
-      }
-      SC.card.entry = Words.limit(e.split(';%').join('\n').trim(), 2000);
-      if ('enabled' in opt) {
-        this.configCard = SC;
-      } else if ('type' in opt) {
-        SC.card.entry = Words.limit(prose('[READ-ONLY]', SC.card.entry), 2000);
-        SC.card.description = Words.limit(prose('[READ-ONLY]', SC.card.description), 2000);
-      }
-      return SC;
-    };
-    getInitCard();
-    //#endregion
-    this.cache ??= _default;
-    if (!('settings' in this.cache)) {
-      this.cache = _default;
-      this.cache.errors.push('Invalid config: restoring...');
-    }
-    if (this.cache.settings.minTurns < 3) {
-      this.cache.settings.minTurns = 3;
-      this.cache.errors.push('Invalid minTurns: must be greater than 3, restoring...');
-    }
-    if (this.cache.cooldown < this.cache.settings.minTurns) {
-      this.cache.cooldown = this.cache.settings.minTurns;
-      this.cache.errors.push('Invalid cooldown: must be <= minTurns, restoring...');
-    }
-  }
-  //#endregion
-  //#region Modifiers
-  /**
-   * @template {ModifierFN} F
-   * @param {F} [fn]
-   */
-  static isModifier(fn) {
-    return typeof fn === 'function' && !Object.is(fn.toString(), globalThis.modifier.toString());
-  }
-  /**
-   * @template { string | ModifierFN } Code
-   * @param { Code } code
-   * @param { boolean } [useEval]
-   * @returns { ?ModifierFN }
-   */
-  static Func(code, useEval) {
-    try {
-      if (!(typeof code === 'string' || typeof code === 'function'))
-        throw new TypeError('"code" must be a type of string or function', {
-          cause: 'MagicCards.Func()'
-        });
-      if (typeof code === 'string') {
-        const parse = code.startsWith('return ') ? code : `return ${code}`;
-        if (useEval) return eval(`(() => { ${parse} })()`);
-        return new Object.constructor(parse)();
-      }
-      return code;
-    } catch (e) {
-      con.log(e instanceof AIDError ? e : new AIDError(e, { cause: 'MagicCards.Func()' }));
-      return null;
-    }
-  }
-  /**
-   * @template {Text | ModifierFN | [typeof text, typeof stop] | ReturnType<ModifierFN>} T
-   * @param {T} TEXT
-   */
-  setText(TEXT) {
-    /**
-     * @param { T } val
-     */
-    const extract = (val) => {
-      if (val instanceof Promise) {
-        throw new TypeError('Unsupported, "val" is a type of Promise.', {
-          cause: 'MagicCards.text'
-        });
-      } else if (typeof val === 'function') {
-        if (/(auto|smart)cards?/i.test(val.name)) {
-          throw new TypeError(`"${val.name}" is not supported`, {
-            cause: val.name || 'MagicCards.setText():extract'
-          });
+        if (!main) {
+          SC.card.description = Words.limit($config.instruction.ai, scLimit);
         }
-        const { text, stop } = this;
-        /**
-         * @type { any }
-         */
-        let r = text;
-        try {
-          r = val.call(this, text, stop);
-        } catch (e) {
-          con.log(
-            e instanceof AIDError
-              ? e
-              : new AIDError(e, { cause: val.name || 'MagicCards.setText():extract' })
+        SC.card.entry = Words.limit(resp.join('\n').trim(), scLimit);
+      }
+      return {
+        card: SC.card,
+        id: SC.id,
+        index: SC.index
+      };
+    };
+    if (hook === 'context' && this.turn > 2) {
+      getInitCard('settings');
+      const addDB = (cache.settings.useSmallModel ? [] : cache.database)
+        .map(({ type }) => type.toLowerCase())
+        .filter((type) => !/default|settings/.test(type));
+      const hiddenCards = Array.isArray(cache.settings.hiddenCards)
+        ? cache.settings.hiddenCards
+        : [];
+      if (!hiddenCards.includes('debug')) this.debugCard = getInitCard('debug');
+      for (const type of addDB.filter((type) => !hiddenCards.includes(type))) {
+        getInitCard(type);
+      }
+      for (const type of addDB.filter((type) => hiddenCards.includes(type))) {
+        const { index, card } = this.storyCards.get(type);
+        if (isNull(card)) continue;
+        storyCards.splice(index, 1);
+      }
+      // Only works on turn 3
+      if (this.turn === 3) {
+        const memoryBank = storyCards.some(
+          ({ id }) => typeof id === 'string' && id.startsWith('{') && id.endsWith('}')
+        );
+        if (!memoryBank) {
+          cache.errors.push(
+            'Please enable "MEMORY BANK"\nPath: GAMEPLAY > MEMORY SYSTEM > MEMORY BANK'
           );
-          return text;
+          cache.settings.enabled = false;
         }
-        return extract(r);
-      } else if (Array.isArray(val)) {
-        const [TEXT, STOP = false] = val;
-        if (Object.is(STOP, true)) this.stop = STOP;
-        return TEXT;
-      } else if (isObj(val)) {
-        const { text, stop = false } = val;
-        if (Object.is(stop, true)) this.stop = stop;
-        return text;
       }
-      return val;
-    };
-    TEXT = extract(TEXT);
-    if (Object.is(this.stop, false) && typeof TEXT !== 'string') {
-      throw new TypeError(`"str" must be a type of string, got "${objToStr(TEXT)}"`, {
-        cause: 'MagicCards.text'
-      });
     }
-    if (typeof text !== 'undefined') {
-      if (!Object.is(text, TEXT) && (typeof TEXT === 'string' || isNull(TEXT))) text = TEXT;
+    //#endregion
+    if (cache.settings.cooldown < 3) {
+      cache.settings.cooldown = 3;
+      cache.errors.push('Invalid cooldown: must be <= 3, restoring...');
     }
-
-    return this;
-  }
-
-  get text() {
-    return typeof globalThis.text !== 'undefined' ? text : ' ';
-  }
-  set text(str) {
-    if (typeof globalThis.text !== 'undefined') text = str;
-  }
-  /** @type { typeof stop } */
-  get stop() {
-    return typeof globalThis.stop !== 'undefined' ? stop : typeof globalThis.text !== 'string';
-  }
-  set stop(bol) {
-    if (typeof globalThis.stop !== 'undefined' && typeof bol === 'boolean') {
-      if (!Object.is(stop, bol)) {
-        stop = bol;
-        if (Object.is(bol, true) && typeof this.text === 'string') this.text = null;
+    if (cache.settings.useSmallModel === true && cache.settings.autoRetrieve === true) {
+      cache.errors.push('Invalid: disable "useSmallModel" first');
+      cache.settings.autoRetrieve = false;
+    }
+    this.refresh(false);
+    try {
+      if (hook === 'output') {
+        if (isEmpty(cache.errors)) {
+          if (this.turn === 3) {
+            this.message('Install complete!');
+          } else if (!this.turn) {
+            this.message('Installing...');
+          }
+        }
+        while (cache.errors.length > 0) {
+          const text = cache.errors.shift();
+          if (!text) break;
+          this.message({ emoji: '⚠️', text });
+        }
       }
+      if (!cache.settings.enabled) {
+        cache.data = {};
+        cache.dataQueue = [];
+        cache.generating = false;
+      }
+      const installed =
+        this.turn >= 3 &&
+        typeof this[hook] === 'function' &&
+        (cache.settings.enabled || hook === 'input');
+      this.installed = installed;
+      if (installed) this[hook]();
+    } catch (e) {
+      con.err(e, hook);
     }
   }
   //#endregion
-  get turn() {
-    if (typeof globalThis.info !== 'undefined' && isNum(info.actionCount)) {
-      return Math.abs(info.actionCount);
-    }
-    return 0;
-  }
-  get history() {
-    const s = this.turn - this.cache.cooldown;
-    return (history[s] ? history.slice(s) : history)
-      .filter(({ text }) => !isEmpty(text) && !/🎴|⚠️/g.test(text))
-      .map((h) => {
-        return {
-          index: history.indexOf(h),
-          text: Words.split(h.text).join(' ').trim(),
-          rawText: h.text,
-          type: h.type
-        };
-      });
-  }
-  get database() {
-    const t = this.cache.data?.type || 'Default';
-    const db = this.cache.database;
-    return db.find(({ type }) => type === t) ?? Options.createDB();
+  /**
+   * Ensures `modifier` function exists & prevent it from being `undefined`
+   *
+   * _This will ALWAYS be the last function executed!_
+   *
+   * - Add your modifier functions into `hook()`
+   * - **Modifier functions are not called when `mc.cache.generating === true`**
+   */
+  #modifier() {
+    const modifier = () => {
+      const c = isEmpty(this.cache) ? { hook: 'input', generating: false } : this.cache;
+      if (!c.generating) {
+        try {
+          /**
+           * @param {Text | ModifierFN | [typeof text, typeof stop] | ReturnType<ModifierFN>} val
+           */
+          const extract = (val) => {
+            const str = objToStr(val);
+            if (/(Async|Generator)Function|Promise/.test(str)) {
+              throw new TypeError(`Unsupported, "val" is a type of ${str}.`);
+            } else if (typeof val === 'function') {
+              if (/(auto|smart|magic)cards?/i.test(val.name)) {
+                throw new TypeError(`Please remove "${val.name}" incompatible with MagicCards.`);
+              }
+              return extract(val(this.text, this.stop, c.hook));
+            } else if (Array.isArray(val)) {
+              const [TEXT = ' ', STOP = false] = val;
+              if (Object.is(STOP, true)) this.stop = STOP;
+              return TEXT;
+            } else if (isObj(val)) {
+              const { text, stop = false } = val;
+              if (Object.is(stop, true)) this.stop = stop;
+              return text;
+            }
+            return val;
+          };
+          for (const fn of rmDup(this.modifiers)) {
+            const txt = extract(fn);
+            if (!Object.is(this.text, txt) && (typeof txt === 'string' || isNull(txt)))
+              this.text = txt;
+          }
+        } catch (e) {
+          con.err(e, c.hook);
+        }
+      }
+      if (c.hook === 'output' && !isBlank(state.messageHistory)) {
+        const message = rmDup(state.messageHistory).join('\n——————————————————————————\n');
+        console.log(message);
+        state.message = message;
+        state.messageHistory = [];
+      }
+      this.#hook(false);
+      this.#save();
+      const { text, stop } = this;
+      return { text, stop };
+    };
+    globalThis.modifier = modifier;
+    Object.freeze(globalThis.modifier);
+    return this;
   }
   /**
    * @template S
@@ -952,41 +1065,23 @@ const MagicCards = class {
   message(...messages) {
     for (const m of messages) {
       if (typeof m === 'string') {
-        con.msg(`🎴 MagicCards 🢂 ${m}`);
+        con.msg(`🎴 MagicCards => ${m}`);
       } else if (isObj(m) && 'emoji' in m) {
-        con.msg(`${m.emoji} MagicCards 🢂 ${m.text}`);
+        con.msg(`${m.emoji} MagicCards => ${m.text}`);
       }
     }
     return this;
   }
-  /**
-   * @param {StoryCard} card
-   */
-  editor(card) {
-    /** @type { MagicId } */
-    const obj = card.id.startsWith('{') && card.id.endsWith('}') ? JSON.parse(card.id) : {};
-    obj.data ??= this.cache.data;
-    obj.cooldown ??= this.cache.cooldown;
-    if (!obj.summary) obj.summary = [];
-    return {
-      card: obj,
-      save() {
-        if (card.id.startsWith('{') && card.id.endsWith('}')) {
-          card.id = JSON.stringify(obj);
-        }
-        return card;
-      }
-    };
-  }
-  refresh() {
+  refresh(resetCooldown = true) {
     const cache = this.cache;
     const $db = Options.createDB();
+    // This could be optimized
     const database = cache.database.map((data) => {
       const db = {
         ...$db,
         ...data
       };
-      for (const [key, value] of Object.entries(db)) {
+      for (const [key, value] of toArray(db, { entries: true })) {
         if (key === 'type') continue;
         if (!(key in $db)) {
           delete db[key];
@@ -995,10 +1090,9 @@ const MagicCards = class {
           db[key] = rmDup('Name', value);
         } else if (isObj(value)) {
           if (isEqual(value, $db[key])) continue;
-          db[key] = {
-            ...$db[key],
-            ...value
-          };
+          for (const k of toArray($db[key], { keys: true })) {
+            if (!(k in value)) value[k] = $db[key][k];
+          }
         } else if (!Object.is(value, $db[key])) {
           db[key] = $db[key];
         }
@@ -1007,20 +1101,25 @@ const MagicCards = class {
       return db;
     });
     cache.database = rmDup(database);
-    cache.cooldown = OPTIONS.cooldown ?? Options.createDefault().cooldown;
+    if (resetCooldown) {
+      cache.settings.cooldown =
+        OPTIONS?.settings?.cooldown ?? Options.createDefault().settings.cooldown;
+    }
     cache.generating = !(isEmpty(cache.dataQueue) && isEmpty(cache.data));
+    if (!Object.is(cache.stop, globalThis.stop)) globalThis.stop = cache.stop;
     return this;
   }
-  save() {
+  /**
+   * Save changed values of `this.cache` into `state` object
+   */
+  #save() {
     const defaultOptions = Options.createDefault();
     const config = Options.copy(this.cache);
-    if (config !== defaultOptions) {
-      for (const [key, value] of Object.entries(config)) {
+    if (!isEqual(config, defaultOptions)) {
+      for (const [key, value] of toArray(config, { entries: true })) {
         if (!(key in defaultOptions)) {
           delete config[key];
-        } else if (Array.isArray(value) && isEqual(value, defaultOptions[key])) {
-          delete config[key];
-        } else if (isObj(value) && isEqual(value, defaultOptions[key])) {
+        } else if ((Array.isArray(value) || isObj(value)) && isEqual(value, defaultOptions[key])) {
           delete config[key];
         } else if (Object.is(value, defaultOptions[key])) {
           delete config[key];
@@ -1030,303 +1129,395 @@ const MagicCards = class {
     }
     return config;
   }
-  cleanup() {
-    if (this.cache && !this.cache.generating) {
-      const { points } = Words.data.switch();
-      rmDup(this.modifiers).forEach((modifier) => {
-        const fn = MagicCards.Func(modifier);
-        if (fn) {
-          const $fn = [...fn.toString()]
-            .map(Words.toCodePoint)
-            .filter((f) => !points.includes(f))
-            .map(Words.getUniHex)
-            .join('')
-            .trim();
-          if (!/(function\s*)?text(\s*=>)?\s*return\s*text/.test($fn) && MagicCards.isModifier(fn))
-            this.setText(fn);
-        }
-      });
-    }
-    this.save();
-    if (!isBlank(state.messageHistory)) {
-      const message = rmDup(state.messageHistory).join('\n——————————————————————————\n');
-      console.log(message);
-      state.message = message;
-      state.messageHistory = [];
-    }
-    const { text, stop } = this;
-    return { text, stop };
-  }
   print(message = '', emoji = '🎴', name = this.cache.data.name) {
     const data = this.cache.data;
     if (!isEmpty(data)) {
-      return `\n- ${emoji} ◖${isEmpty(name) ? 'MagicCards' : name}◗ 🢂 ${message}\n`;
+      return `\n- ${emoji} ◖${isEmpty(name) ? 'MagicCards' : name}◗ => ${message}\n`;
     }
-    return `\n- ${emoji} 🢂 ${message}\n`;
+    return `\n- ${emoji} => ${message}\n`;
   }
   /**
    * @param {Partial<dataQueue>} data
    */
   queue(data = {}) {
     data.type ??= 'Characters';
-    const db = this.cache.database.find(({ type }) => data.type === type) ?? Options.createDB();
-    const resp = {
+    const db =
+      this.cache.database.find(({ type }) => data.type === type) ?? Options.createDB(data.type);
+    const _default = {
       name: '',
       entry: '',
+      extra: [],
       output: '',
       progress: 0,
-      ...db,
-      ...data
+      loaded: {},
+      ...db
     };
+    const init = (...params) => {
+      const obj = {};
+      for (const p of params.filter(isObj)) {
+        for (const [k, v] of toArray(p, { entries: true })) {
+          if (isObj(v) && !isEqual(p[k], _default[k])) {
+            for (const key of toArray(_default[k], { keys: true })) {
+              if (!(key in v)) v[key] = _default[k][key];
+            }
+          }
+          Object.assign(obj, { [k]: v });
+        }
+      }
+      return obj;
+    };
+    /** @type {dataQueue} */
+    const resp = init(_default, data);
+    const searchValue = /[^\w\s]+/g;
     for (let e of [resp.name, resp.entry].filter((i) => !isEmpty(i))) {
-      if (typeof e === 'string')
-        e = Words.split(e.trim())
-          .join(' ')
-          .replaceAll(/[^\w\s]+/g, '');
+      if (typeof e === 'string') e = Words.split(e.trim()).join(' ').replaceAll(searchValue, '');
     }
-    resp.name = resp.name.trim();
-    resp.entry = resp.entry.trim();
+    resp.name = resp.name.replace(/\.$/, '').trim();
+    resp.entry = resp.entry.replace(/\.$/, '').trim();
     return resp;
   }
-  getCardId(TITLE) {
-    const i = Words.toLowerCase(TITLE).trim();
-    const r = new RegExp(RegExp.escape(i), 'i');
-    const card = storyCards.find(({ id }) => {
-      try {
-        if (typeof id === 'string') {
-          if (id.startsWith('{') && id.endsWith('}')) {
-            const j = JSON.parse(id);
-            return r.test(j.id);
+  get storyCards() {
+    const settings = this.cache.settings;
+    const StoryCard = this.StoryCard;
+    return {
+      /**
+       * @param { Partial<StoryCard> & { magicId?: MagicId } } $StoryCard
+       */
+      create($StoryCard = {}) {
+        const { keys, title = keys, magicId = {} } = $StoryCard;
+        const { index, card, id } = this.get(title);
+        if (card) {
+          return {
+            id,
+            index,
+            card
+          };
+        }
+        magicId.id ??= title;
+        magicId.sync ??= true;
+        magicId.autoHistory ??=
+          magicId.sync && settings.autoHistory ? settings.useSmallModel === false : false;
+        magicId.defaultCooldown ??= settings.cooldown;
+        magicId.cooldown ??=
+          !magicId.sync && isNum(magicId.defaultCooldown)
+            ? magicId.defaultCooldown
+            : settings.cooldown;
+        magicId.summary ??= '';
+        delete $StoryCard.magicId;
+        const toKeys = () => {
+          const key =
+            $StoryCard.entry && /locations?/i.test($StoryCard.entry)
+              ? title
+              : title.split(/ |_/)[0];
+          const arr =
+            key.length < 6
+              ? [
+                  ` ${key} `,
+                  ` ${key}'`,
+                  `"${key} `,
+                  ` ${key}.`,
+                  ` ${key}?`,
+                  ` ${key}!`,
+                  ` ${key};`,
+                  `'${key} `,
+                  `(${key} `,
+                  ` ${key})`,
+                  ` ${key}:`,
+                  ` ${key}"`,
+                  `[${key} `,
+                  ` ${key}]`,
+                  `—${key} `,
+                  ` ${key}—`,
+                  `{${key} `,
+                  ` ${key}}`
+                ]
+              : [
+                  `${key} `,
+                  ` ${key}`,
+                  `${key}'`,
+                  `"${key}`,
+                  `${key}.`,
+                  `${key}?`,
+                  `${key}!`,
+                  `${key};`,
+                  `'${key}`,
+                  `(${key}`,
+                  `${key})`,
+                  `${key}:`,
+                  `${key}"`,
+                  `[${key}`,
+                  `${key}]`,
+                  `—${key}`,
+                  `${key}—`,
+                  `{${key}`,
+                  `${key}}`
+                ];
+          arr.unshift(key);
+          let TEXT = '';
+          while (TEXT.length <= 100) {
+            const k = arr.shift();
+            if (!k) break;
+            TEXT += `${k};%`;
           }
-          return id === i;
-        }
-      } catch {
-        return false;
-      }
-    });
-    if (card)
-      return {
-        id: card.id,
-        index: storyCards.indexOf(card),
-        card
-      };
-    return {
-      id: TITLE,
-      index: -2,
-      card: null
-    };
-  }
-  /**
-   * @param { Partial<StoryCard & { magicId: MagicId }> } $StoryCard
-   */
-  createCard($StoryCard = {}) {
-    const {
-      keys = '\0',
-      entry = '',
-      type = MagicCards.constant.type,
-      title = keys,
-      description
-    } = $StoryCard;
-    const { index, card, id } = this.getCardId(title);
-    if (card) {
-      return {
-        id,
-        index,
-        card
-      };
-    }
-    const toKeys = () => {
-      const key = title.split(/\x20|_/)[0];
-      const arr =
-        key.length < 6
-          ? [
-              ` ${key} `,
-              ` ${key}'`,
-              `"${key} `,
-              ` ${key}.`,
-              ` ${key}?`,
-              ` ${key}!`,
-              ` ${key};`,
-              `'${key} `,
-              `(${key} `,
-              ` ${key})`,
-              ` ${key}:`,
-              ` ${key}"`,
-              `[${key} `,
-              ` ${key}]`,
-              `—${key} `,
-              ` ${key}—`,
-              `{${key} `,
-              ` ${key}}`
-            ]
-          : [
-              `${key} `,
-              ` ${key}`,
-              `${key}'`,
-              `"${key}`,
-              `${key}.`,
-              `${key}?`,
-              `${key}!`,
-              `${key};`,
-              `'${key}`,
-              `(${key}`,
-              `${key})`,
-              `${key}:`,
-              `${key}"`,
-              `[${key}`,
-              `${key}]`,
-              `—${key}`,
-              `${key}—`,
-              `{${key}`,
-              `${key}}`
-            ];
-      arr.unshift(key);
-      let TEXT = '';
-      while (TEXT.length <= 100) {
-        const k = arr.shift();
-        if (!k) break;
-        TEXT += `${k};%`;
-      }
-      TEXT = TEXT.split(';%')
-        .filter((v) => !isBlank(v))
-        .join(',');
-      while (TEXT.length > 100) {
-        const t = TEXT.split(',').filter((v) => !isBlank(v));
-        const p = t.pop();
-        if (!p) break;
-        TEXT = t.join(',');
-      }
-      return TEXT;
-    };
-    $StoryCard.magicId ??= { id };
-    const SC = this.StoryCard({
-      id: JSON.stringify($StoryCard.magicId),
-      // id,
-      keys: toKeys(),
-      entry,
-      type,
-      title,
-      description
-    });
-    if (!isNull(SC.error)) throw SC.error;
-    return SC;
-  }
-  /**
-   * @param { { text: string }[] } arr
-   * @param { boolean } [isOutput=false]
-   */
-  getPList(arr = [], isOutput = false) {
-    /**
-     * @type { { [key: PropertyKey]: string; } }
-     */
-    const mapper = {};
-    const cache = this.cache;
-    const data = cache.data || {};
-    const reg = /([\w\s]+):\s?([^;\]]+)(;|\])/g;
-    let extra = '';
-    let list = '';
-    let complete = false;
-    let categoryLimit = data.limit.category;
-
-    for (const { text } of [
-      ...this.history.map(({ text }) => {
-        return { text };
-      }),
-      ...arr
-    ].filter(({ text }) => !isEmpty(text))) {
-      for (const [, key, value, endof] of text.matchAll(reg) || []) {
-        const k = key.trim();
-        const v = value.trim();
-        if (endof === ']') {
-          complete = true;
-          break;
-        }
-        if (data.category.includes(k) && !(k in mapper)) {
-          mapper[k] = v;
-          list += `${k}:${v};`;
-        }
-      }
-    }
-    if (typeof mapper.name === 'string' && typeof data.name === 'string') {
-      const n = mapper.name.split('_').join(' ');
-      const d = data.name.split('_').join(' ');
-      if (Words.toLowerCase(n) !== Words.toLowerCase(d)) {
-        data.name = n;
-      }
-    }
-    const progress = () => +((Object.keys(mapper).length / categoryLimit) * 100).toFixed(2);
-    if (!complete) {
-      if (isOutput && Object.is(progress(), data.progress)) {
-        if (data.limit.retry > 0) {
-          data.limit.retry -= 1;
+          TEXT = TEXT.split(';%')
+            .filter((v) => !isBlank(v))
+            .join(',');
+          while (TEXT.length > 100) {
+            const t = TEXT.split(',').filter((v) => !isBlank(v));
+            const p = t.pop();
+            if (!p) break;
+            TEXT = t.join(',');
+          }
+          return TEXT;
+        };
+        return StoryCard({
+          ...$StoryCard,
+          id: JSON.stringify(magicId),
+          keys: toKeys(),
+          title
+        });
+      },
+      /**
+       * @param {string} [TITLE]
+       */
+      get(TITLE) {
+        const i = Words.toLowerCase(TITLE);
+        const card = storyCards.find((sc) => {
+          try {
+            const { card } = this.edit(sc, true);
+            return Words.toLowerCase(card.id) === i;
+          } catch {
+            return false;
+          }
+        });
+        if (card)
+          return {
+            id: card.id,
+            index: storyCards.indexOf(card),
+            card
+          };
+        return {
+          id: TITLE,
+          index: -2,
+          card: null
+        };
+      },
+      /**
+       * @template { StoryCard } S
+       * @template { number | undefined } T
+       * @template { T extends number ? OptionId : MagicId } C
+       * @param { S } sc
+       * @param { T } [type]
+       * @param { C } _default
+       * @returns { T extends number ? { card: C } : { card: C; save(): S; toString(): string } }
+       */
+      edit(sc, type, _default = {}) {
+        /** @type {OptionId & MagicId} */
+        const obj = sc.id.startsWith('{') && sc.id.endsWith('}') ? JSON.parse(sc.id) : _default;
+        if (type === 1 || type === true)
+          return {
+            card: obj
+          };
+        if (typeof type === 'number') {
+          obj.pin ??= true;
         } else {
-          categoryLimit = Object.keys(mapper).length;
+          obj.sync ??= true;
+          obj.autoHistory ??=
+            obj.sync && settings.autoHistory ? settings.useSmallModel === false : false;
+          obj.defaultCooldown ??= settings.cooldown;
+          obj.cooldown ??=
+            !obj.sync && isNum(obj.defaultCooldown) ? obj.defaultCooldown : settings.cooldown;
+          obj.summary ??= '';
+          if (obj.sync) {
+            if (obj.autoHistory !== settings.autoHistory) {
+              obj.autoHistory = settings.useSmallModel === false;
+            }
+            if (isNum(obj.defaultCooldown) && obj.defaultCooldown !== settings.cooldown) {
+              obj.cooldown = obj.defaultCooldown ?? settings.cooldown;
+            }
+          }
         }
-        extra = ` ↺ = ${data.limit.retry}`;
+        sc.description ??= '';
+        const desc = sc.description.matchAll(/^([\w\s]+):\x20?(.*)/gm) || [];
+        for (const [, key, value] of desc) {
+          const k = key.trim();
+          const v = value.trim();
+          if (!(k in obj)) continue;
+          let val;
+          if (/(true|false)$/im.test(v)) {
+            val = Words.toLowerCase(v) === 'true';
+          } else if (isNum(v)) {
+            val = Number(v);
+          } else {
+            val = v;
+          }
+          if (Object.is(obj[k], val)) continue;
+          obj[k] = val;
+        }
+        return {
+          card: obj,
+          save() {
+            sc.id = JSON.stringify(obj);
+            return sc;
+          },
+          toString() {
+            return Object.entries(obj)
+              .sort()
+              .map(([k, v]) => `${k}: ${v}`)
+              .join('\n');
+          }
+        };
       }
-      complete = data.category.filter((cat) => mapper[cat]).length >= categoryLimit;
-    }
-    const raw = list;
-    list = Words.split(list).join().trim();
-    list = complete && !isBlank(list) ? `[${list}]` : `[${list}`;
-    const minimize = (str = '') => {
-      const arr = [...data.category].reverse();
-      while (str.length > data.limit.card) {
-        const r = new RegExp(`(${arr.shift()}):\\s?[^;\\]]+(;|\\])`, 'g');
-        str = str.replaceAll(r, '');
-      }
-      return str;
-    };
-    list = (complete ? minimize(`${list}`) : list).replace(/;\]/, ']');
-    data.progress = complete ? 100 : progress();
-    return {
-      complete,
-      list,
-      raw,
-      extra,
-      mapper
     };
   }
-  /**
-   * @param {string} str
-   */
-  plist(str = '') {
-    /**
-     * @type { { [key: string]: string; } }
-     */
-    const obj = {};
-    for (const [, key, value, endof] of str.matchAll(/([\w\s]+):\s?([^;\]]+)(;|\])/g) || []) {
-      const k = key.trim();
-      const v = value.trim();
-      if (!(k in obj)) {
-        obj[k] = v;
-      }
-      if (/\]/.test(endof ?? '')) {
-        break;
-      }
-    }
-    const minimize = (a = []) => {
-      const j = `[${a.join(';')}]`;
-      if (j.length > 2_000) {
-        a.shift();
-        return minimize(a);
-      }
-      return j.replace(/;\]/, ']').trim();
-    };
+  get PList() {
+    const cache = this.cache;
     return {
-      list: obj,
-      toString() {
-        return minimize([...Object.entries(obj)].map(([k, v]) => `${k}: ${v}`));
+      /**
+       * Transform strings into PList object
+       * @param {...string} strings
+       */
+      from(...strings) {
+        /**
+         * @type { { [key: string]: string; } }
+         */
+        const list = {};
+        for (const s of strings.filter((i) => typeof i === 'string')) {
+          for (const [, key, value, endof] of s.matchAll(/([\w\s]+):\s?([^;\]]+)(;|\])/g) || []) {
+            const k = key.trim();
+            const v = value.trim();
+            list[k] =
+              k in list && list[k] !== v ? rmDup(list[k].split(','), v.split(',')).join(',') : v;
+            if (/\]/.test(endof ?? '')) break;
+          }
+        }
+        const minimize = (a = []) => {
+          const j = `[${a.join(';')}]`;
+          if (j.length > MagicCards.constant.storyCard) {
+            a.shift();
+            return minimize(a);
+          }
+          return j.replace(';]', ']').trim();
+        };
+        return {
+          list,
+          toString() {
+            const arr = toArray(list, { entries: true });
+            return minimize(arr.map(([k, v]) => `${k}: ${v}`));
+          }
+        };
+      },
+      data: {
+        category: {
+          get() {
+            cache.data = isEmpty(cache.data) ? cache.dataQueue.shift() || {} : cache.data;
+            if (isEmpty(cache.data.category)) return [];
+            const a = toArray(cache.data.loaded, { keys: true });
+            return cache.data.category.filter((c) => !a.includes(c));
+          },
+          toString() {
+            return this.get().join(',');
+          }
+        },
+        /**
+         * @param { boolean } [isOutput=false]
+         * @param { ...{ text: string } } arr
+         */
+        get(isOutput = false, ...arr) {
+          cache.data = isEmpty(cache.data) ? cache.dataQueue.shift() || {} : cache.data;
+          const data = cache.data;
+          const reg = /([\w\s]+):\s?([^;[\]\n]+)(;|\]|\n)/g;
+          for (const { text } of rmDup(arr).filter(({ text }) => isValid(text))) {
+            for (const [, key, value, endof] of text.matchAll(reg) || []) {
+              const k = key
+                .trim()
+                .split('')
+                .map((val, i) => (i === 0 ? val.toUpperCase().trim() : Words.toLowerCase(val)))
+                .join('');
+              if (data.category.includes(k) && !(k in data.loaded)) {
+                data.loaded[k] = value.trim();
+              }
+              if (/\]/.test(endof)) break;
+            }
+          }
+          const loaded = data.category.filter((i) => i in data.loaded).length;
+          const progress = () => +((loaded / data.limit.category) * 100).toFixed(2);
+          let extra = '';
+          if (isOutput && Object.is(progress(), data.progress)) {
+            if (data.limit.retry > 0) {
+              data.limit.retry -= 1;
+              data.limit.category -= 1;
+            } else if (data.limit.retry <= 0) {
+              data.limit.category = loaded;
+            }
+            extra = ` ↺ = ${data.limit.retry}`;
+          }
+          const complete = loaded >= data.limit.category;
+          const raw = this.toString();
+          data.progress = complete ? 100 : progress();
+          const minimize = (str = '') => {
+            const arr = [...data.category].reverse();
+            while (str.length > data.limit.card) {
+              const r = new RegExp(`(${arr.shift()}):\\s?[^;\\]\\n]+(;|\\]\\n)`, 'g');
+              str = str.replaceAll(r, '');
+            }
+            return str;
+          };
+          return {
+            complete,
+            list: (complete ? minimize(`[${raw}]`) : `[${raw}`).replace(';]', ']'),
+            raw,
+            extra
+          };
+        },
+        toString() {
+          cache.data = isEmpty(cache.data) ? cache.dataQueue.shift() || {} : cache.data;
+          if (isEmpty(cache.data.category)) return '';
+          cache.data.loaded.Name ??= cache.data.name;
+          const arr = toArray(cache.data.loaded, { entries: true })
+            .filter(([k]) => cache.data.category.includes(k))
+            .sort(([a], [b]) => cache.data.category.indexOf(a) - cache.data.category.indexOf(b));
+          cache.data.loaded = Object.fromEntries(arr);
+          return arr.map(([k, v]) => `${k}: ${v}`).join(';');
+        }
       }
     };
+  }
+  #hook(load = true) {
+    const hooks = {
+      input: false,
+      context: false,
+      output: false
+    };
+    const cache = this.cache;
+    if (load) {
+      if (isNum(info.maxChars)) {
+        hooks.input = false;
+        hooks.context = true;
+        hooks.output = false;
+      } else if (cache.hook === 'input') {
+        hooks.input = true;
+        hooks.context = false;
+        hooks.output = false;
+      } else if (cache.hook === 'output') {
+        hooks.input = false;
+        hooks.context = false;
+        hooks.output = true;
+      }
+    } else {
+      hooks.input = cache.hook === 'output';
+      hooks.context = cache.hook === 'input';
+      hooks.output = cache.hook === 'context';
+    }
+    cache.hook = Object.keys(hooks).find((k) => hooks[k]) ?? 'input';
+    return cache.hook;
   }
   //#region Hooks
   input() {
     const cache = this.cache;
-    if (!this.turn || !cache.settings.enabled) return this;
     const t = this.text.trim();
     if (
-      /^(<system>|\[system:)/i.test(t) ||
+      /^(<s>|<system>|\[system:)/i.test(t) ||
       t.startsWith('##') ||
       (t.startsWith('**') && t.endsWith('**'))
     ) {
@@ -1337,44 +1528,82 @@ const MagicCards = class {
      * @type { { name: string; cmd: string; emoji: string; message: string; }[] }
      */
     const queues = [];
+    const reserved = new RegExp(`(${cache.database.map(({ type }) => type).join('|')})$`, 'i');
     for (const [, cmd, name = '', entry = ''] of t.matchAll(
-      /(\/[am\s]+c)\s+([^"'/;]+);?([^;/]+)?/gi
+      /(\/[am\s]+c)\s+([^"'/;]+);?([^"'/;]+)?/gi
     ) || []) {
       const data = this.queue({ name, entry });
       if (isBlank(data.name)) continue;
-      data.name = data.name.trim();
-      data.entry = data.entry.trim();
-      const r = new RegExp(RegExp.escape(data.name.split(/\x20|_/)[0]), 'i');
-      const messages = [];
-      let emoji = '🎴';
+      const r = new RegExp(RegExp.escape(data.name.split(/ |_/)[0]), 'i');
       const inQueue =
         queues.some((dq) => r.test(dq.name)) || cache.dataQueue.some((dq) => r.test(dq.name));
+      const messages = [];
+      let emoji = '🎴';
       if (inQueue) {
         emoji = '⚠️';
         messages.push('Already in queue');
-      } else {
-        if (this.turn + 1 >= cache.settings.minTurns) {
-          const { card } = this.getCardId(data.name);
-          if (isNull(card)) {
-            messages.push('Preparing...');
-          } else {
-            messages.push('Updating...');
-          }
-          if (cache.generating === false) cache.generating = !cache.generating;
-        } else {
-          cache.cooldown = cache.settings.minTurns;
-          emoji = '⚠️';
-          messages.push(
-            `(Not enough story) Generating in ${Math.abs(this.turn - cache.cooldown - 1)} turns`
-          );
+      } else if (/(retrieve|get)$/.test(data.name)) {
+        emoji = '⚠️';
+        messages.push('Executing entry check...');
+        const excludes = [];
+        for (const sc of this.magicCards()) {
+          const { card } = this.storyCards.edit(sc, undefined);
+          excludes.push(card.id.trim());
         }
+        const data = this.queue({
+          entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
+          type: 'Retrieve'
+        });
+        if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+      } else if (/((dis|en)able|toggle)$/.test(data.name)) {
+        emoji = '⚠️';
+        this.cache.settings.enabled = !this.cache.settings.enabled;
+        messages.push(`Toggling MagicCards: ${this.cache.settings.enabled ? 'on' : 'off'}`);
+      } else if (/(reset|restart|restore)$/.test(data.name)) {
+        emoji = '⚠️';
+        messages.push('Restoring settings...');
+        this.cache = Options.createDefault();
+      } else if (/(clear|clr|cls)$/.test(data.name)) {
+        emoji = '⚠️';
+        messages.push('Clearing cache...');
+        cache.dataQueue = [];
+        cache.data = {};
+        cache.generating = false;
+      } else if (/(summarize|compress)$/.test(data.name)) {
+        emoji = '⚠️';
+        messages.push('Compressing Story Cards...');
+        for (const sc of this.magicCards()) {
+          const edit = this.storyCards.edit(sc, undefined);
+          if (edit.card.autoHistory) edit.card.cooldown = 0;
+          sc.description = edit.toString();
+          edit.save();
+        }
+      } else if (reserved.test(data.name)) {
+        emoji = '⚠️';
+        messages.push('Reserved name');
+      } else {
+        const { card } = this.storyCards.get(data.name);
+        if (isNull(card)) {
+          messages.push('Preparing...');
+        } else {
+          emoji = '⚠️';
+          messages.push('Already exists');
+          queues.push({
+            name: data.name,
+            cmd: cmd.toUpperCase(),
+            emoji,
+            message: messages.join(' => ')
+          });
+          continue;
+        }
+        if (cache.generating === false) cache.generating = true;
         cache.dataQueue.push(data);
       }
       queues.push({
         name: data.name,
         cmd: cmd.toUpperCase(),
         emoji,
-        message: messages.join(' 🢂 ')
+        message: messages.join(' => ')
       });
     }
     const combine = (() => {
@@ -1390,10 +1619,10 @@ const MagicCards = class {
     let TEXT = '';
     if (combine && dq) {
       const names = queues.map(({ name }) => `◖${name}◗`);
-      TEXT = `${dq.emoji} ${dq.cmd} ${names.join(' ')} 🢂 ${dq.message}`;
+      TEXT = `${dq.emoji} ${dq.cmd} ${names.join(' ')} => ${dq.message}`;
     } else {
       TEXT = queues
-        .map(({ emoji, cmd, name, message }) => `${emoji} ${cmd} ◖${name}◗ 🢂 ${message}`)
+        .map(({ emoji, cmd, name, message }) => `${emoji} ${cmd} ◖${name}◗ => ${message}`)
         .join('\n');
     }
     if (!isBlank(TEXT)) {
@@ -1404,221 +1633,260 @@ const MagicCards = class {
   }
   context() {
     const cache = this.cache;
-    if (cache.disabled || !this.turn || !cache.settings.enabled) return this;
+    if (isEmpty(cache) || cache.stop || cache.disabled) return this;
     /* Change World Lore, Recent Story, Story Summary into World_Lore, Recent_Story, Story_Summary */
     {
-      const mcReg = /(\n-\s)?(🎴|⚠️)(\s\/)?/g;
       const rsReg = /(World Lore|Recent Story|Story Summary):\s?/g;
       const $t = Words.split(this.text)
-        .filter((i) => !mcReg.test(i))
+        .filter((i) => !MagicCards.regExp.test(i))
         .map((i) => {
           return rsReg.test(i) ? i.split(' ').join('_') : i;
         })
         .join('\n');
       if (!isBlank($t)) this.text = $t;
     }
+    const wlReg = /World_Lore:\s*([\s\S]*?)$/i;
+    const rsReg = /Recent_Story:\s*([\s\S]*?)$/i;
+    const [, wl = ''] = wlReg.exec(this.text) || [];
+    const [, rs = ''] = rsReg.exec(this.text) || [];
 
-    let entries = [];
-    /** @type {StoryCard[]} */
-    const cards = Array.from(this);
-    for (const sc of cards) {
-      const { card, save } = this.editor(sc);
-      if (sc.entry && !isBlank(card.summary)) {
-        const pl = this.plist(sc.entry);
-        if ('Name' in pl.list) {
-          const n = pl.list.Name.split(/ |_/).join('|');
-          const reg = new RegExp(n, 'g');
-          if (reg.test(this.text)) {
-            pl.list.History ??= '';
-            for (const s of card.summary) {
-              if (isBlank(pl.list.History)) {
-                pl.list.History = s.History;
-              } else {
-                pl.list.History += `,${s.History}`;
-              }
-            }
-            pl.list.History = Words.limit(
-              pl.list.History,
-              Math.abs(1_000 - (cache.data?.limit?.card ?? 800))
-            );
-            const entryReg = new RegExp(RegExp.escape(sc.entry), 'g');
-            this.text = this.text.replaceAll(entryReg, pl.toString());
-          }
+    const excludes = [];
+    for (const sc of this.magicCards()) {
+      const { card, save, toString } = this.storyCards.edit(sc, undefined);
+      const name = card.id.trim();
+      excludes.push(name);
+      const s = name.split(/ |_/);
+      const wlMention = s.some((i) => wl.includes(i));
+      const rsMention = s.some((i) => rs.includes(i));
+      if (rsMention && !wlMention) {
+        this.text = this.text.replace(wlReg, `World_Lore:\n${sc.entry}`);
+      } else if (card.autoHistory) {
+        const { list } = this.PList.from(sc.entry, sc.description);
+        const getCooldown = () => {
+          const v = isNum(list.defaultCooldown) && Number(list.defaultCooldown);
+          const def = card.defaultCooldown ?? cache.settings.cooldown;
+          return v && v !== def ? v : def;
+        };
+        if (!isBlank(card.summary)) {
+          const getLimit = () => {
+            const v = isNum(list.cardLimit) && Number(list.cardLimit);
+            const def = isEmpty(cache.data) ? 800 : cache.data.limit.card;
+            return v && v !== def ? v : def;
+          };
+          list.Events = Words.limit(card.summary.replace(/\.;/, ';'), Math.abs(2000 - getLimit()));
+          this.text = this.text.replaceAll(new RegExp(RegExp.escape(sc.entry), 'g'), `${list}`);
         }
-      }
-      if (card.cooldown === 0) {
-        const data = this.queue({
-          name: card.id.trim(),
-          entry: sc.entry,
-          type: 'Compress'
-        });
-        if (!cache.dataQueue.includes(data)) {
-          cache.dataQueue.push(data);
-          card.cooldown = cache.cooldown;
+        if (card.cooldown <= 0) {
+          const data = this.queue({
+            name,
+            entry: sc.entry,
+            extra: [list.Events],
+            type: 'Compress'
+          });
+          if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+          card.cooldown = getCooldown();
+          sc.description = toString();
           save();
         }
-      } else {
-        entries.push(card.id.trim());
       }
     }
-    entries = rmDup(entries.filter((i) => !isEmpty(i)));
-
+    cache.data = isEmpty(cache.data) ? cache.dataQueue.shift() || {} : cache.data;
     cache.generating = !(isEmpty(cache.dataQueue) && isEmpty(cache.data));
 
+    if (!isNull(this.debugCard)) {
+      this.debugCard.card.entry = JSON.stringify(cache.data, null, ' ');
+      this.debugCard.card.description = Words.limit(
+        cache.errors.join('\n').trim(),
+        MagicCards.constant.storyCard
+      );
+    }
+
     if (cache.generating === false && this.turn > 0) {
-      const cd = (this.turn % cache.cooldown) - cache.turnsSpent;
+      const cd = this.actionCount % cache.settings.cooldown;
       if (cd === 0) {
         cache.generating = !(isEmpty(cache.dataQueue) && isEmpty(cache.data));
-      } else if (cd + 1 === cache.cooldown) {
+      } else if (cd + 1 === cache.settings.cooldown && cache.settings.autoRetrieve) {
         if (isEmpty(cache.data.name)) {
           /* We do not specify a `name` */
           const data = this.queue({
-            entry: entries.join(','),
+            entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
             type: 'Retrieve'
           });
           if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
         }
-
-        this.message('Executing on the next turn...');
+        this.message('Executing entry check on next turn...');
       }
     }
     if (cache.generating) {
       cache.turnsSpent += 1;
-      if (!cache.data.name && !isBlank(cache.dataQueue)) cache.data = cache.dataQueue.shift() || {};
-      const data = cache.data || {};
-      const { complete, list } = this.getPList([{ text: data.output }]);
+      const data = cache.data;
       const parts = {
         $1: data.name,
         $2: data.entry,
-        $3: list
+        $3: `[${this.PList.data}`,
+        $00: 'event1',
+        $990: '<s>',
+        $991: '</s>',
+        $992: data.instruction.example
       };
-      let INT = `${data.instruction.ai}\n${data.instruction.user}`;
-      if (!('instruction' in data))
-        INT = `${this.database.instruction.ai}\n${this.database.instruction.user}`;
-      INT = INT.split('\\n')
-        .join('\n')
-        .replaceAll(/(\$\d+)/g, (_) => parts[_] ?? _);
-
-      if (!complete) {
-        let TEXT = '';
-        const History = [...this.history].reverse();
-        const num = (info.maxChars ?? 2_000) - INT.length;
-        while (TEXT.length <= num) {
-          const h = History.shift();
-          if (!h) break;
-          TEXT += h.text;
-        }
-        if (!isBlank(TEXT))
-          this.text = this.text.replace(/Recent_Story:\s*([\s\S]*?)$/i, `Recent_Story:\n${TEXT}`);
-      }
+      for (const n of data.extra.keys()) parts[`$0${n}`] = data.extra.at(0);
+      const wrapper = () => {
+        /** Debug: Reset in-case of instruction change/update */
+        const db = (isNull(this.debugCard) ? cache : Options.createDefault()).database.find(
+          (i) => i.type === data.type
+        );
+        if (db) data.instruction = Options.copy(db.instruction);
+        const instruction = () => {
+          if (isEmpty(data.loaded)) return data.instruction.ai;
+          return (data.instruction.ai = data.instruction.ai.replaceAll(
+            /Category:[^\n]+/g,
+            `Category:${this.PList.data.category}`
+          ));
+        };
+        return prose('', instruction(), data.instruction.user)
+          .split('\\n')
+          .join('\n')
+          .replaceAll(/(\$\d+)/g, (_) => parts[_] ?? _);
+      };
+      const INT = wrapper();
       this.text += INT;
     }
 
     return this;
   }
   output() {
-    if (this.turn === 2) {
-      this.message('Install complete!');
-    } else if (!this.turn) {
-      this.message('Installing...');
-    }
     const cache = this.cache;
-    while (cache.errors.length > 0) {
-      const text = cache.errors.shift();
-      if (!text) break;
-      this.message({ emoji: '⚠️', text });
-    }
+    if (Object.is(cache.stop, true)) this.stop = false;
     if (cache.disabled) {
       delete cache.disabled;
       return this;
     }
-    if (!this.turn || !cache.settings.enabled) return this;
+    /**
+     * Must have valid `type`, `entry`, `keys`, or `title`
+     * @type {StoryCard[]}
+     */
+    const cards = storyCards
+      .filter(({ id }) => isValid(id) && !(id.startsWith('{') && id.endsWith('}')))
+      .filter(({ type, entry, keys, title = keys, description }) => {
+        const { list } = this.PList.from(entry, description);
+        return (
+          isValid(type) && /character|location/i.test(type) && isValid(title) && !isBlank(list)
+        );
+      });
+    if (!isBlank(cards)) {
+      this.message(`Converted "${cards.length}" StoryCards...`);
+      for (const sc of cards) {
+        const defaultId = sc.title ?? sc.keys ?? '';
+        const keys = defaultId.split(',');
+        if (isBlank(keys)) continue;
+        const defaultCooldown = Math.abs(cache.settings.cooldown + storyCards.indexOf(sc) * 2);
+        const edit = this.storyCards.edit(sc, undefined, {
+          sync: false,
+          defaultId,
+          defaultCooldown,
+          id: keys[0].trim()
+        });
+        sc.description = `${edit.toString()}\n${sc.description}`.trim();
+        edit.save();
+      }
+    }
+
     if (cache.generating) {
       const progressBar = (upNext = cache.dataQueue.at(0)) => {
-        upNext ??= cache.data;
-        const num = cache.data.progress;
+        const data = cache.data;
+        upNext ??= data;
+        const num = data.progress;
         if (Number.isNaN(num)) return '';
         const current = Math.round(Math.round(num) / 10);
         const loaded = '█'.repeat(current);
         const remaining = '▒'.repeat(Math.abs(10 - current));
-        const endof = `\n🢂 [ ${Words.getUniHex('1fa84')} CONTINUE ]`;
+        const endof = `\n=> [ ${Words.getUniHex('1fa84')} CONTINUE ]`;
         let TEXT = '';
-        TEXT += `\n- ${num}%: ${loaded}${remaining}`;
+        TEXT += `\n- 🎴 ${num}%: ${loaded}${remaining}`;
+        if (data.type === 'Characters' || data.type === 'Locations') {
+          const catTotal = data.limit.category;
+          const catLoaded = data.category.filter((i) => i in data.loaded).length;
+          TEXT += `\n- 🎴 Categories: ${catLoaded}/${catTotal}`;
+        }
         if (num === 100) {
-          TEXT += `\n- Summarize in ${cache.cooldown} turns`;
+          TEXT += `\n- 🎴 Summarize in ${cache.settings.cooldown} turns`;
         }
         if (isEmpty(upNext)) {
-          TEXT += `${endof}\n[System: Resume from exact pre-interruption point.]`;
+          TEXT += `${endof}\n<s>Continue story from exact pre-interruption point.</s>`;
         } else if (
           !isEmpty(upNext) &&
           !isEmpty(upNext.name) &&
-          !Object.is(upNext.name, cache.data.name)
+          !Object.is(upNext.name, data.name)
         ) {
-          TEXT += `\n- Up Next: 🎴${upNext.name}${endof}`;
+          TEXT += `\n- 🎴 Up Next: ${upNext.type === 'Locations' ? '🏚️' : ''}${upNext.name}${endof}`;
         } else {
           TEXT += endof;
         }
         return TEXT;
       };
-      // Characters|Locations
-      if (isEmpty(cache.data.name) || /Retrieve/.test(cache.data.type)) {
+      if (isEmpty(cache.data.name)) {
         const t = this.text.trim();
+        const messages = [];
         if (/Retrieve/.test(cache.data.type)) {
-          this.text = this.print('Checking for new entries...', '🎴', 'MagicCards');
-          for (const [, type, entries] of t.matchAll(/(Characters):\s?(.*);/g) || []) {
-            for (const name of entries.split(',')) {
-              if (/none|n\/a|unknown|not\s?found/i.test(name)) continue;
+          const iterator = t.matchAll(/(Characters|Locations):\s?([^;\n\]]+)/g) || [];
+          for (const [, type, entries] of iterator) {
+            for (const n of entries.split(',')) {
+              const name = n.trim();
               if (!/[A-Z]/.test(name)) continue;
-              const scExists = Array.from(this).some((sc) => {
-                const { card } = this.editor(sc);
-                return new RegExp(RegExp.escape(card.id.trim()), 'i').test(name.trim());
+              if (/none|n\/a|unknown|not\s?found/i.test(name)) continue;
+              const scExists = Array.from(this.magicCards()).some((sc) => {
+                const { card } = this.storyCards.edit(sc, true);
+                return new RegExp(RegExp.escape(card.id.trim()), 'i').test(name);
               });
               if (scExists) continue;
               const data = this.queue({ name, type });
-              const r = new RegExp(RegExp.escape(data.name.split(/\x20|_/).join('|')), 'i');
+              if (isEmpty(data.name)) continue;
+              const r = new RegExp(RegExp.escape(data.name.split(/ |_/).join('|')), 'i');
               if (cache.dataQueue.some((dq) => r.test(dq.name.trim()))) continue;
-              const { card } = this.getCardId(data.name);
+              const { card } = this.storyCards.get(data.name);
               if (isNull(card)) cache.dataQueue.push(data);
             }
           }
         }
-        if (!isBlank(cache.dataQueue)) {
-          this.text = this.print(
-            `Adding ${cache.dataQueue.map(({ name }) => `◖${name}◗`).join(' ')} to queue...`
-          );
+        if (isBlank(cache.dataQueue)) {
+          messages.push('No new entries found');
+        } else {
+          const dataQueue = cache.dataQueue
+            .filter(({ type }) => type !== 'Retrieve')
+            .map(({ name, type }) => `◖${type === 'Locations' ? '🏚️' : ''}${name}◗`)
+            .join(' ');
+          if (!isBlank(dataQueue)) messages.push(`Added to queue: ${dataQueue}`);
+        }
+        if (!isBlank(messages)) {
+          this.text = messages.map((i) => this.print(i, '🎴', 'MagicCards')).join('');
         }
         cache.data = cache.dataQueue.shift() || {};
         this.refresh();
       } else {
-        const { complete, list, extra, mapper } = this.getPList(
-          [{ text: cache.data.output }, { text: this.text }],
-          true
+        const { complete, list, extra } = this.PList.data.get(
+          true,
+          this.history,
+          { text: cache.data.output },
+          { text: this.text }
         );
         if (complete) {
-          if (/Compress/.test(cache.data.type)) {
-            const { card } = this.getCardId(mapper.Name);
-            if (!isNull(card) && !isEmpty(mapper)) {
-              const c = this.editor(card);
-              c.card.summary.push({ History: mapper.History });
-              c.card.summary = rmDup(c.card.summary);
-              c.save();
-              card.description = Words.limit(
-                `History: ${c.card.summary.map(({ History }) => History).join(',')}`,
-                2_000
-              );
-            }
-          } else {
-            const obj = {
-              id: cache.data.name,
-              cooldown: cache.cooldown,
-              summary: []
-            };
-            this.createCard({
-              magicId: obj,
-              title: cache.data.name,
-              entry: list
-            });
+          const sc = this.storyCards.create({
+            title: cache.data.name,
+            entry: list,
+            type: cache.data.type === 'Locations' ? MagicCards.constant.location : undefined
+          });
+          if (isNull(sc.card)) throw sc.error;
+          const edit = this.storyCards.edit(sc.card, undefined);
+          if (
+            /Compress/.test(cache.data.type) &&
+            !isEmpty(cache.data.loaded) &&
+            !isEmpty(cache.data.loaded.Events)
+          ) {
+            edit.card.summary = cache.data.loaded.Events;
           }
+          sc.card.cooldown = sc.card.defaultCooldown ?? cache.settings.cooldown;
+          sc.card.description = edit.toString();
+          edit.save();
           const upNext = cache.dataQueue.shift() || {};
           if (/Compress/.test(cache.data.type)) {
             this.message(`Compressed ${cache.data.name}`);
@@ -1629,62 +1897,43 @@ const MagicCards = class {
           cache.data = upNext;
           this.refresh();
         } else {
-          cache.data.output += list;
-          const t = /Compress/.test(cache.data.type) ? 'Compressing...' : 'Generating...';
+          cache.data.output = list;
+          const t = /Compress/.test(cache.data.type)
+            ? 'Compressing...'
+            : `Generating ${Words.toLowerCase(cache.data.type).replace(/s$/, '')}...`;
           this.message(t);
           this.text = this.print(`${t} ${extra}${progressBar()}`);
         }
       }
     } else {
-      const reg = /(\n-\s)?(🎴|⚠️)(\s\/)?/g;
-      history = history.filter(({ text }) => !reg.test(text));
-      for (const sc of Array.from(this)) {
-        const { card, save } = this.editor(sc);
-        card.cooldown--;
-        if (card.cooldown === 0) {
-          this.message(`Compressing ${sc.title} on the next turn...`);
+      if (typeof history !== 'undefined')
+        history = history.filter(({ text }) => !MagicCards.regExp.test(text));
+      for (const sc of this.magicCards()) {
+        const edit = this.storyCards.edit(sc, undefined);
+        if (edit.card.autoHistory) {
+          edit.card.cooldown--;
+          if (edit.card.cooldown === 0) {
+            this.message(`Compressing ${sc.title} on the next turn...`);
+          }
         }
-        save();
+        sc.description = edit.toString();
+        edit.save();
       }
     }
 
     return this;
   }
   //#endregion
-  *[Symbol.iterator]() {
-    const t = MagicCards.constant.type;
-    for (const sc of storyCards.filter(({ type }) => type === t)) {
+  *magicCards() {
+    const cards = storyCards.filter(
+      ({ id }) => isValid(id) && id.startsWith('{') && id.endsWith('}') && !id.includes('"pin"')
+    );
+    for (const sc of cards) {
       yield sc;
     }
   }
-};
+}
 const mc = new MagicCards(OPTIONS);
-/**
- * Ensures `modifier` function exists & prevent it from being `undefined`
- *
- * _This will ALWAYS be the last function executed!_
- */
-const modifier = () => mc.cleanup();
-globalThis.modifier = modifier;
-/**
- * @param  {...ModifierFN} modifiers
- */
-const input = (...modifiers) => {
-  mc.modifiers.push(...modifiers);
-  return mc.input();
-};
-/**
- * @param  {...ModifierFN} modifiers
- */
-const context = (...modifiers) => {
-  mc.modifiers.push(...modifiers);
-  return mc.context();
-};
-/**
- * @param  {...ModifierFN} modifiers
- */
-const output = (...modifiers) => {
-  mc.modifiers.push(...modifiers);
-  return mc.output();
-};
+globalThis.MagicCards = MagicCards;
+globalThis.mc = mc;
 //#endregion

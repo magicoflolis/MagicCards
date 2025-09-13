@@ -8,7 +8,6 @@
     "search.exclude": {
 			"**/.vscode/**": true,
       "**/build/**": true,
-      "**/dist/**": true,
       "**/node_modules/**": true
     },
     "explorer.excludeGitIgnore": true,
@@ -21,7 +20,6 @@
     "files.exclude": {
 			"**/.vscode/**": true,
 			"**/build/**": true,
-			"**/dist/**": true,
 			"**/node_modules/**": true
     },
     "local-history.daysLimit": 3,

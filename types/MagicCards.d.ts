@@ -6,7 +6,7 @@ import './ScriptingTypes.d.ts';
  */
 export type MagicAPI = unknown;
 
-declare function regExpEscape(str: string): string;
+export declare function regExpEscape(str: string): string;
 
 declare global {
   class AIDError extends Error {
@@ -33,22 +33,16 @@ declare global {
   interface Map<K, V> {
     groupBy: typeof groupBy;
   }
-  class MagicCards {
-    configCard: {
-      id: string;
-      index: number;
-      card: StoryCard;
-    };
-    [Symbol.iterator](): Generator<StoryCard, void, undefined>;
+  interface RegExpConstructor {
+    escape<S>(str: S): string;
   }
   /**
    * Similar to {@link Modifier} type and {@link modifier} function.
    */
   type ModifierFN = <T extends typeof text, S extends typeof stop>(
-    this: typeof MagicCards,
     text: T,
     stop: S,
-    type: 'library'
+    type: defaultOptions['hook']
   ) => { text: T; stop?: S };
   interface dataEntry {
     category: string[];
@@ -67,42 +61,52 @@ declare global {
   interface dataQueue extends dataEntry {
     name: string;
     entry: string;
+    extra: string[];
     output: string;
     progress: number;
-  }
-  interface MagicId {
-    id: string;
-    // data: {
-    //   name: string;
-    //   entry: string;
-    // };
-    cooldown: number;
-    summary: {
-      History: string;
-      // entry: {
-      //   [key: string]: string;
-      // };
-      // turn: Info['actionCount'];
-    }[];
-  }
-  type defaultOptions = {
-    settings: {
-      enabled: boolean;
-      minTurns: number;
+    loaded: {
+      [key: string]: string;
     };
-    pins: string[];
-    cooldown: number;
+  }
+  interface defaultOptions {
+    settings: {
+      autoHistory: boolean;
+      autoRetrieve: boolean;
+      enabled: boolean;
+      cooldown: number;
+      hiddenCards: string[];
+      useSmallModel: boolean;
+    };
     data: dataQueue;
     database: dataEntry[];
     dataQueue: dataQueue[];
-    disabled?: boolean;
+    disabled: boolean;
     errors: string[];
     generating: boolean;
+    pins: string[];
+    stop: boolean;
     turnsSpent: number;
+    hook: 'input' | 'context' | 'output';
     // [key: string]: unknown;
-  };
+  }
+
+  interface CardId {
+    defaultId?: string;
+    id: string;
+  }
+  interface OptionId extends CardId {
+    pin: boolean;
+  }
+  interface MagicId extends CardId {
+    autoHistory: boolean;
+    defaultCooldown?: number;
+    cooldown: number;
+    summary: string;
+    sync: boolean;
+  }
+
   interface State {
-    messageHistory?: string[];
     MagicCards?: defaultOptions;
+    messageHistory?: string[];
   }
 }

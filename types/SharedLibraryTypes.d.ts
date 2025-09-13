@@ -50,11 +50,11 @@ declare global {
     /**
      * This is `NAME` in `DETAILS` section of a story card.
      */
-    title?: string;
+    title: string;
     /**
      * This is `TRIGGERS` in `DETAILS` section of a story card.
      */
-    keys?: string;
+    keys: string;
     /**
      * This is `TYPE` in `DETAILS` section of a story card.
      */
@@ -62,7 +62,7 @@ declare global {
     /**
      * This is `value` when exported through `Story Card Management`.
      */
-    entry?: string;
+    entry: string;
     /**
      * This is `NOTES` in `DETAILS` section of a story card.
      */
@@ -70,15 +70,15 @@ declare global {
     /**
      * Defined after creating a StoryCard using {@link addStoryCard}.
      */
-    createdAt?: string;
+    createdAt: string;
     /**
      * Defined after creating a StoryCard using {@link addStoryCard}.
      */
-    updatedAt?: string;
+    updatedAt: string;
     /**
      * Defined after creating a StoryCard using {@link addStoryCard}.
      */
-    useForCharacterCreation?: boolean;
+    useForCharacterCreation: boolean;
   }
   interface StateMemory {
     /**
@@ -106,7 +106,7 @@ declare global {
   }
   interface Info {
     /**
-     * Total number of actions in the adventure.
+     * Number of actions in the adventure so far.
      *
      * Here's how and when info.actionCount increments:
      * - During a **Continue** action: `+1 → onContext → onOutput`
@@ -117,19 +117,28 @@ declare global {
      */
     actionCount: number;
     /**
-     * Characters in the adventure.
+     * Array of the character names for multiplayer adventures.
      */
     characters: Array<string | { name: string }>;
     /**
      * Estimated maximum number of characters that can be included in the model context (character per token can vary).
+     *
+     * The maximum length that text can be. The server will truncate the text you return to this length.
+     *
+     * **When available => `onModelContext` | `Context`**
      */
     maxChars?: number;
     /**
      * Number of characters included in the model context from the memory.
+     *
+     * **When available => `onModelContext` | `Context`**
+     * @deprecated use {@link Info.maxChars} instead.
      */
     memoryLength?: number;
     /**
-     * Context Tokens.
+     * Number of context tokens available.
+     *
+     * **When available => `onModelContext` | `Context`**
      */
     contextTokens?: number;
   }
@@ -145,7 +154,7 @@ declare global {
    *
    * ---
    *
-   * _Example(s):_
+   * _Examples:_
    *
    * ```js
    * log(addStoryCard("Superman", "a bird")); // Returns new length of the `storyCards` array.
@@ -304,7 +313,8 @@ declare global {
    *
    * @global
    */
-  let storyCards: StoryCard[];
+  let storyCards: Partial<StoryCard>[];
+  // Omit<StoryCard, 'createdAt' | 'updatedAt' | 'useForCharacterCreation'>
   /**
    * @deprecated use {@link storyCards} instead.
    */
@@ -353,7 +363,8 @@ declare global {
    *
    * @global
    */
-  let text: string | null;
+  let text: typeof stop extends undefined | false ? null : string;
+  // let text: string | null;
   type Text = typeof text;
 
   /**
