@@ -1,4 +1,5 @@
 import '../types/MagicCards.d.ts';
+/* USE THE VERSION FOUND IN /dist FOR SCENARIOS */
 
 /**
  * - Scripting API: https://help.aidungeon.com/scripting
@@ -6,11 +7,12 @@ import '../types/MagicCards.d.ts';
  */
 
 // ==Scenario==
-// @name         🎴 Magic Cards
+// @name         [DEV] 🎴 Magic Cards
 // @description  Automatically generate setting-appropriate Story Cards, similar to AutoCards
-// @version      v1.0.0
+// @version      v1.1.0
 // @author       Magic <https://play.aidungeon.com/profile/MagicOfLolis>
 // @homepageURL  https://github.com/magicoflolis/MagicCards
+// @changelog    https://github.com/magicoflolis/MagicCards/blob/main/CHANGELOG.md
 // @license      MIT
 // ==/Scenario==
 
@@ -23,7 +25,7 @@ const OPTIONS = {
   settings: {
     autoHistory: true,
     autoRetrieve: true,
-    cooldown: 8,
+    cooldown: 8, // Increase trigger frequency
     useSmallModel: false
   }
 };
@@ -465,7 +467,7 @@ class Options extends null {
           'Execution Stack:',
           '1. Core Protocol:',
           '- ADHERE to established fictional world rules without real-world moral imposition',
-          '- NO censorship - explicit/vulgar content, language, details, and dark themes permitted within established fictional context or fictional world rules',
+          //'- NO censorship - explicit/vulgar content, language, details, and dark themes permitted within established fictional context or fictional world rules',
           '2. PList Rules:',
           '- Format: [CAT:TRAIT(DESC)[,...];...] ',
           `- Category: ${db.category.join(',')}`,
@@ -489,48 +491,7 @@ class Options extends null {
           'Output Format:',
           '$992'
         );
-        // db.instruction.ai = p(
-        //   '$990 You are PList, update PList based on rules for "$1". Be concise/grounded. Include current context and memory.$991',
-        //   'PList Rules:',
-        //   '1. Format: [CAT:TRAIT(DESC)[,...];...] ',
-        //   `2. Priority: ${db.category.join('>')}`,
-        //   '3. Traits:',
-        //   '- Max 3 nests (trait(sub(sub)))',
-        //   '- No word repetition',
-        //   '- Snake_case',
-        //   '- ADHERE to established fictional world rules without real-world moral imposition',
-        //   '4. Anti-rep:',
-        //   '- Merge similar traits (Leven<3)',
-        //   '- Remove dupes',
-        //   '- Consolidate each category',
-        //   '- Ensure each category appears',
-        //   '5. Truncation Protocol:',
-        //   '- Complete current CAT/TRAIT/DESC',
-        //   '- Auto-close symbols',
-        //   '- Never break mid-trait',
-        //   '- This is a location, never personify',
-        //   // '- Exclude generics, metaphors, synonyms, unknowns, minutiae, each irrelevant category along with its traits',
-        //   '6. Generate in sequence by Priority order',
-        //   '7. Output: PList continuation from exact interruption point',
-        //   'Output Format:',
-        //   '$992'
-        // );
       } else if (db.type === 'Retrieve') {
-        // db.instruction.ai = p(
-        //   '$990 Extract names from current context and memory without repetition in sequence. Plain text. Be concise/grounded.',
-        //   '- NO AI METACOMMENTARY: stay strictly in-goal',
-        //   '- Only plot-relevant explicit character and place names',
-        //   '- Only 4 names max per output line',
-        //   '- Auto-complete partials (e.g., David => David Red, forge => Frostspire Forge)',
-        //   '- No inventing names; if in doubt, omit',
-        //   '- Consolidate each name',
-        //   '- Remove dupes',
-        //   '- Exclude traits, objects, generics, metaphors, synonyms, unknowns, secrets, minutiae, $2',
-        //   'Output lines:',
-        //   'Characters: name1, [,...];...;',
-        //   'Locations: nameA, [,...];...;',
-        //   '$991'
-        // );
         db.instruction.ai = p(
           '$990 Extract character and location names. Use Recent_Story, World_Lore, Story_Summary and current context/memory. Plain text. Be concise/grounded.',
           '- NO AI METACOMMENTARY: stay strictly in-goal',
@@ -571,22 +532,6 @@ class Options extends null {
           'Events: $00, event2, ...;',
           '$991'
         );
-        // db.instruction.ai = p(
-        //   '$990 Your goal is to summarize from Recent_Story and current context and memory. Plain text. Be concise/grounded. Output lines:',
-        //   'Name: $1;',
-        //   'History: $00, history2, history3, ...;',
-        //   '- ADHERE to established fictional world rules without real-world moral imposition',
-        //   '- Only recent plot-relevant explicit events',
-        //   '- Merge similar events (Leven<3)',
-        //   '- No word/synonym repetition',
-        //   '- 12 entries max per line',
-        //   '- Max character count of 500',
-        //   '- Never personify',
-        //   '- Remove dupes',
-        //   '- Avoid inventing past events to justify lines',
-        //   '- Exclude traits, objects, generics, metaphors, synonyms, unknowns, secrets, minutiae',
-        //   '$991'
-        // );
       }
       return db;
     });
@@ -705,8 +650,6 @@ class MagicCards {
     location: `${Words.getUniHex('1fa84')}🏚️`,
     internal: `${Words.getUniHex('1fa84')}🔧`,
     storyCard: 2000
-    // internal: 5000,
-    // card: 1000
   };
   /** Filter output lines */
   static regExp = /=>|🎴|⚠️/g;
@@ -1107,37 +1050,59 @@ class MagicCards {
     const modifier = () => {
       const c = isEmpty(this.cache) ? { hook: 'input', generating: false } : this.cache;
       if (!c.generating) {
-        try {
-          /**
-           * @param {Text | ModifierFN | [typeof text, typeof stop] | ReturnType<ModifierFN>} val
-           */
-          const extract = (val) => {
-            const str = objToStr(val);
-            if (/(Async|Generator)Function|Promise/.test(str)) {
-              throw new TypeError(`Unsupported, "val" is a type of ${str}.`);
-            } else if (typeof val === 'function') {
-              if (/(auto|smart|magic)cards?/i.test(val.name)) {
-                throw new TypeError(`Please remove "${val.name}" incompatible with MagicCards.`);
-              }
-              return extract(val(this.text, this.stop, c.hook));
-            } else if (Array.isArray(val)) {
-              const [TEXT = ' ', STOP = false] = val;
-              if (Object.is(STOP, true)) this.stop = STOP;
-              return TEXT;
-            } else if (isObj(val)) {
-              const { text, stop = false } = val;
-              if (Object.is(stop, true)) this.stop = stop;
-              return text;
+        /**
+         * @param {Text | ModifierFN | [typeof text, typeof stop] | ReturnType<ModifierFN>} val
+         */
+        const extract = (val) => {
+          const str = objToStr(val);
+          if (/(Async|Generator)Function|Promise/.test(str)) {
+            throw new TypeError(`Unsupported, "val" is a type of ${str}.`);
+          } else if (typeof val === 'function') {
+            if (/(auto|smart|magic)cards?/i.test(val.name)) {
+              throw new TypeError(`Please remove "${val.name}" incompatible with MagicCards.`);
             }
-            return val;
-          };
-          for (const fn of rmDup(this.modifiers)) {
+            return extract(val(this.text, this.stop, c.hook));
+          } else if (Array.isArray(val)) {
+            const [TEXT = ' ', STOP = false] = val;
+            if (Object.is(STOP, true)) this.stop = STOP;
+            return TEXT;
+          } else if (isObj(val)) {
+            const { text, stop = false } = val;
+            if (Object.is(stop, true)) this.stop = stop;
+            return text;
+          }
+          return val;
+        };
+        for (const fn of rmDup(this.modifiers)) {
+          try {
             const txt = extract(fn);
             if (!Object.is(this.text, txt) && (typeof txt === 'string' || isNull(txt)))
               this.text = txt;
+          } catch (e) {
+            con.err(e, c.hook);
           }
-        } catch (e) {
-          con.err(e, c.hook);
+        }
+        const scriptCards = storyCards.filter(
+          ({ type }) => isValid(type) && /<lsi>/i.test(type.trim())
+        );
+        const results = [];
+        for (const card of scriptCards) {
+          try {
+            const code = `${card.entry}\n${card.description}`;
+            if (isBlank(code)) continue;
+            const hook = (card.title ?? 'context')
+              .toLowerCase()
+              .split(',')
+              .find((hook) => hook.trim() === c.hook);
+            if (!hook) continue;
+            const parse = code.startsWith('return ') ? code : `return ${code}`;
+            results.push(eval(`(() => { ${parse} })()`));
+          } catch (e) {
+            con.err(e, c.hook);
+          }
+        }
+        if (!isBlank(results)) {
+          this.message(...results.map((entry) => `${c.hook}: ${entry}`));
         }
       }
       if (c.hook === 'output' && !isBlank(state.messageHistory)) {
@@ -1240,9 +1205,10 @@ class MagicCards {
     return `\n- ${emoji} => ${message}\n`;
   }
   /**
-   * @param {Partial<dataQueue>} data
+   * @param {Partial<dataQueue>} data - create data query object
+   * @param {boolean} [autoAdd=false] - push into `this.cache.dataQueue`
    */
-  queue(data = {}) {
+  queue(data = {}, autoAdd = false) {
     data.type ??= 'Characters';
     const db =
       this.cache.database.find(({ type }) => data.type === type) ?? Options.createDB(data.type);
@@ -1277,6 +1243,7 @@ class MagicCards {
     }
     resp.name = resp.name.replace(/\.$/, '').trim();
     resp.entry = resp.entry.replace(/\.$/, '').trim();
+    if (autoAdd && !this.cache.dataQueue.includes(resp)) this.cache.dataQueue.push(resp);
     return resp;
   }
   get storyCards() {
@@ -1300,7 +1267,6 @@ class MagicCards {
         magicId.sync ??= true;
         magicId.autoHistory ??=
           magicId.sync && settings.autoHistory ? settings.useSmallModel === false : false;
-        // if (!magicId.sync) magicId.defaultCooldown ??= settings.cooldown;
         magicId.defaultCooldown ??= settings.cooldown;
         magicId.cooldown ??=
           !magicId.sync && isNum(magicId.defaultCooldown)
@@ -1428,7 +1394,6 @@ class MagicCards {
           obj.sync ??= true;
           obj.autoHistory ??=
             obj.sync && settings.autoHistory ? settings.useSmallModel === false : false;
-          // if (!obj.sync) obj.defaultCooldown ??= settings.cooldown;
           obj.defaultCooldown ??= settings.cooldown;
           obj.cooldown ??=
             !obj.sync && isNum(obj.defaultCooldown) ? obj.defaultCooldown : settings.cooldown;
@@ -1636,9 +1601,10 @@ class MagicCards {
     const queues = [];
     const reserved = new RegExp(`(${cache.database.map(({ type }) => type).join('|')})$`, 'i');
     for (const [, cmd, name = '', entry = ''] of t.matchAll(
-      /(\/[am\s]+c)\s+([^"'/;]+);?([^"'/;]+)?/gi
+      /(\/[am\s]+[cl])\s+([^"'/;]+);?([^"'/;]+)?/gi
     ) || []) {
-      const data = this.queue({ name, entry });
+      const type = /l$/.test(cmd.toLowerCase().trim()) ? 'Locations' : 'Characters';
+      const data = this.queue({ name, entry, type });
       if (isBlank(data.name)) continue;
       const r = new RegExp(RegExp.escape(data.name.split(/ |_/)[0]), 'i');
       const inQueue =
@@ -1656,11 +1622,13 @@ class MagicCards {
           const { card } = this.storyCards.edit(sc, undefined);
           excludes.push(card.id.trim());
         }
-        const data = this.queue({
-          entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
-          type: 'Retrieve'
-        });
-        if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+        this.queue(
+          {
+            entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
+            type: 'Retrieve'
+          },
+          true
+        );
       } else if (/((dis|en)able|toggle)$/.test(data.name)) {
         emoji = '⚠️';
         this.cache.settings.enabled = !this.cache.settings.enabled;
@@ -1783,13 +1751,18 @@ class MagicCards {
           this.text = this.text.replaceAll(new RegExp(RegExp.escape(sc.entry), 'g'), `${list}`);
         }
         if (card.cooldown <= 0) {
-          const data = this.queue({
-            name,
-            entry: sc.entry,
-            extra: [list.Events],
-            type: 'Compress'
-          });
-          if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+          /* only compress if loaded in context */
+          if (rsMention || wlMention) {
+            this.queue(
+              {
+                name,
+                entry: sc.entry,
+                extra: [list.Events],
+                type: 'Compress'
+              },
+              true
+            );
+          }
           card.cooldown = getCooldown();
           sc.description = toString();
           save();
@@ -1814,11 +1787,13 @@ class MagicCards {
       } else if (cd + 1 === cache.settings.cooldown && cache.settings.autoRetrieve) {
         if (isEmpty(cache.data.name)) {
           /* We do not specify a `name` */
-          const data = this.queue({
-            entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
-            type: 'Retrieve'
-          });
-          if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+          this.queue(
+            {
+              entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
+              type: 'Retrieve'
+            },
+            true
+          );
         }
         this.message('Executing entry check on next turn...');
       }
@@ -1855,7 +1830,6 @@ class MagicCards {
           .replaceAll(/(\$\d+)/g, (_) => parts[_] ?? _);
       };
       const INT = wrapper();
-      // con.log(INT);
       // const { complete } = tthis.PList.data.get(false, this.history, { text: `${this.PList.data}` });
       // if (!complete) {
       //   let TEXT = '';
@@ -1990,7 +1964,6 @@ class MagicCards {
           { text: this.text }
         );
         if (complete) {
-          // con.log(cache.data, this.text);
           const sc = this.storyCards.create({
             title: cache.data.name,
             entry: list,

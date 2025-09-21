@@ -9,9 +9,10 @@
 // ==Scenario==
 // @name         🎴 Magic Cards
 // @description  Automatically generate setting-appropriate Story Cards, similar to AutoCards
-// @version      v1.0.0
+// @version      v1.1.0
 // @author       Magic <https://play.aidungeon.com/profile/MagicOfLolis>
 // @homepageURL  https://github.com/magicoflolis/MagicCards
+// @changelog    https://github.com/magicoflolis/MagicCards/blob/main/CHANGELOG.md
 // @license      MIT
 // ==/Scenario==
 
@@ -22,7 +23,7 @@
  */
 const OPTIONS = {
   /*
-  Uncomment if you use "Premium Models"
+  Uncomment if you use large AI models, "premium account"
   
   settings: {
     autoHistory: true,
@@ -433,7 +434,6 @@ class Options extends null {
           'Execution Stack:',
           '1. Core Protocol:',
           '- ADHERE to established fictional world rules without real-world moral imposition',
-          '- NO censorship - explicit/vulgar content, language, details, and dark themes permitted within established fictional context or fictional world rules',
           '2. PList Rules:',
           '- Format: [CAT:TRAIT(DESC)[,...];...] ',
           `- Category: ${db.category.join(',')}`,
@@ -1010,37 +1010,59 @@ class MagicCards {
     const modifier = () => {
       const c = isEmpty(this.cache) ? { hook: 'input', generating: false } : this.cache;
       if (!c.generating) {
-        try {
-          /**
-           * @param {Text | ModifierFN | [typeof text, typeof stop] | ReturnType<ModifierFN>} val
-           */
-          const extract = (val) => {
-            const str = objToStr(val);
-            if (/(Async|Generator)Function|Promise/.test(str)) {
-              throw new TypeError(`Unsupported, "val" is a type of ${str}.`);
-            } else if (typeof val === 'function') {
-              if (/(auto|smart|magic)cards?/i.test(val.name)) {
-                throw new TypeError(`Please remove "${val.name}" incompatible with MagicCards.`);
-              }
-              return extract(val(this.text, this.stop, c.hook));
-            } else if (Array.isArray(val)) {
-              const [TEXT = ' ', STOP = false] = val;
-              if (Object.is(STOP, true)) this.stop = STOP;
-              return TEXT;
-            } else if (isObj(val)) {
-              const { text, stop = false } = val;
-              if (Object.is(stop, true)) this.stop = stop;
-              return text;
+        /**
+         * @param {Text | ModifierFN | [typeof text, typeof stop] | ReturnType<ModifierFN>} val
+         */
+        const extract = (val) => {
+          const str = objToStr(val);
+          if (/(Async|Generator)Function|Promise/.test(str)) {
+            throw new TypeError(`Unsupported, "val" is a type of ${str}.`);
+          } else if (typeof val === 'function') {
+            if (/(auto|smart|magic)cards?/i.test(val.name)) {
+              throw new TypeError(`Please remove "${val.name}" incompatible with MagicCards.`);
             }
-            return val;
-          };
-          for (const fn of rmDup(this.modifiers)) {
+            return extract(val(this.text, this.stop, c.hook));
+          } else if (Array.isArray(val)) {
+            const [TEXT = ' ', STOP = false] = val;
+            if (Object.is(STOP, true)) this.stop = STOP;
+            return TEXT;
+          } else if (isObj(val)) {
+            const { text, stop = false } = val;
+            if (Object.is(stop, true)) this.stop = stop;
+            return text;
+          }
+          return val;
+        };
+        for (const fn of rmDup(this.modifiers)) {
+          try {
             const txt = extract(fn);
             if (!Object.is(this.text, txt) && (typeof txt === 'string' || isNull(txt)))
               this.text = txt;
+          } catch (e) {
+            con.err(e, c.hook);
           }
-        } catch (e) {
-          con.err(e, c.hook);
+        }
+        const scriptCards = storyCards.filter(
+          ({ type }) => isValid(type) && /<lsi>/i.test(type.trim())
+        );
+        const results = [];
+        for (const card of scriptCards) {
+          try {
+            const code = `${card.entry}\n${card.description}`;
+            if (isBlank(code)) continue;
+            const hook = (card.title ?? 'context')
+              .toLowerCase()
+              .split(',')
+              .find((hook) => hook.trim() === c.hook);
+            if (!hook) continue;
+            const parse = code.startsWith('return ') ? code : `return ${code}`;
+            results.push(eval(`(() => { ${parse} })()`));
+          } catch (e) {
+            con.err(e, c.hook);
+          }
+        }
+        if (!isBlank(results)) {
+          this.message(...results.map((entry) => `${c.hook}: ${entry}`));
         }
       }
       if (c.hook === 'output' && !isBlank(state.messageHistory)) {
@@ -1137,9 +1159,10 @@ class MagicCards {
     return `\n- ${emoji} => ${message}\n`;
   }
   /**
-   * @param {Partial<dataQueue>} data
+   * @param {Partial<dataQueue>} data - create data query object
+   * @param {boolean} [autoAdd=false] - push into `this.cache.dataQueue`
    */
-  queue(data = {}) {
+  queue(data = {}, autoAdd = false) {
     data.type ??= 'Characters';
     const db =
       this.cache.database.find(({ type }) => data.type === type) ?? Options.createDB(data.type);
@@ -1174,6 +1197,7 @@ class MagicCards {
     }
     resp.name = resp.name.replace(/\.$/, '').trim();
     resp.entry = resp.entry.replace(/\.$/, '').trim();
+    if (autoAdd && !this.cache.dataQueue.includes(resp)) this.cache.dataQueue.push(resp);
     return resp;
   }
   get storyCards() {
@@ -1530,9 +1554,10 @@ class MagicCards {
     const queues = [];
     const reserved = new RegExp(`(${cache.database.map(({ type }) => type).join('|')})$`, 'i');
     for (const [, cmd, name = '', entry = ''] of t.matchAll(
-      /(\/[am\s]+c)\s+([^"'/;]+);?([^"'/;]+)?/gi
+      /(\/[am\s]+[cl])\s+([^"'/;]+);?([^"'/;]+)?/gi
     ) || []) {
-      const data = this.queue({ name, entry });
+      const type = /l$/.test(cmd.toLowerCase().trim()) ? 'Locations' : 'Characters';
+      const data = this.queue({ name, entry, type });
       if (isBlank(data.name)) continue;
       const r = new RegExp(RegExp.escape(data.name.split(/ |_/)[0]), 'i');
       const inQueue =
@@ -1550,11 +1575,13 @@ class MagicCards {
           const { card } = this.storyCards.edit(sc, undefined);
           excludes.push(card.id.trim());
         }
-        const data = this.queue({
-          entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
-          type: 'Retrieve'
-        });
-        if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+        this.queue(
+          {
+            entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
+            type: 'Retrieve'
+          },
+          true
+        );
       } else if (/((dis|en)able|toggle)$/.test(data.name)) {
         emoji = '⚠️';
         this.cache.settings.enabled = !this.cache.settings.enabled;
@@ -1677,13 +1704,18 @@ class MagicCards {
           this.text = this.text.replaceAll(new RegExp(RegExp.escape(sc.entry), 'g'), `${list}`);
         }
         if (card.cooldown <= 0) {
-          const data = this.queue({
-            name,
-            entry: sc.entry,
-            extra: [list.Events],
-            type: 'Compress'
-          });
-          if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+          /* only compress if loaded in context */
+          if (rsMention || wlMention) {
+            this.queue(
+              {
+                name,
+                entry: sc.entry,
+                extra: [list.Events],
+                type: 'Compress'
+              },
+              true
+            );
+          }
           card.cooldown = getCooldown();
           sc.description = toString();
           save();
@@ -1708,11 +1740,13 @@ class MagicCards {
       } else if (cd + 1 === cache.settings.cooldown && cache.settings.autoRetrieve) {
         if (isEmpty(cache.data.name)) {
           /* We do not specify a `name` */
-          const data = this.queue({
-            entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
-            type: 'Retrieve'
-          });
-          if (!cache.dataQueue.includes(data)) cache.dataQueue.push(data);
+          this.queue(
+            {
+              entry: rmDup(excludes.filter((i) => !isEmpty(i))).join(','),
+              type: 'Retrieve'
+            },
+            true
+          );
         }
         this.message('Executing entry check on next turn...');
       }
